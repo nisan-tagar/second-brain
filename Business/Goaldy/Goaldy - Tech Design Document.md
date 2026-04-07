@@ -1,9 +1,10 @@
-| Field            | Value           |
-| ---------------- | --------------- |
-| **Created**      | 2026-04-03      |
-| **Last Updated** | 2026-04-05 v1.9 |
-| **Version**      | 1.9             |
-| **Status**       | Draft           |
+
+|Field|Value|
+|---|---|
+|**Created**|2026-04-03|
+|**Last Updated**|2026-04-07 v2.0|
+|**Version**|2.0|
+|**Status**|Draft|
 
 ### Change Log
 
@@ -18,7 +19,8 @@
 |1.6|2026-04-05|`type` field expanded to full 6-value enum: 'expense' \| 'income' \| 'transfer' \| 'refund' \| 'investment' \| 'iou'; schema comments document TYPE/TAG orthogonality and financial treatment per type; split constraint updated — splits blocked on transfer/investment/iou, allowed on expense/income/refund; auto-assignment rules documented in schema comments|
 |1.7|2026-04-05|`type` enum reduced to 3 values: 'expense' \| 'income' \| 'transfer'; REFUND/INVESTMENT/IOU removed and explicitly deferred; CHECK constraint simplified; transfer split-block constraint simplified|
 |1.8|2026-04-05|Split-blocking CHECK constraint on TRANSFER removed — splits supported on all transaction types; only constraint remaining is single-tag/split mutual exclusivity|
-|1.9|2026-04-05|Postgres schema additions: `waitlist` table (early access + invitation token lifecycle), `notification_preferences` table (per-user per-channel per-event preferences with future channel support); subscriptions table expanded with onboarding_completed_at field reference|
+|1.9|2026-04-05|Postgres schema additions: `waitlist`, `notification_preferences`, `moneyman_account_mappings` tables|
+|2.0|2026-04-07|Local development storage mode added to Section 3: `GOALDY_STORAGE=local` env var bypasses Drive, reads/writes a local `goaldy.db` file via dev-only tRPC procedures; `requireDevMode` middleware prevents production exposure|
 
 ---
 
@@ -208,6 +210,85 @@ If Drive is unreachable at launch:
 **Goaldy does not support concurrent sessions.** This is an explicit, permanent design decision — not a limitation to be engineered away later. One user, one device active at a time. The last-write-wins sync model is only safe under this constraint. No locking primitives, no conflict resolution, no CRDT complexity. The user acknowledges this at onboarding.
 
 Multiple device access is supported sequentially — open on phone, Drive syncs, open on laptop, downloads the latest file. This is the model. It works for personal finance. It does not work for shared household use (multi-user is a Phase 4 problem explicitly deferred).
+
+### Local Development Mode
+
+During development, working against Google Drive is slow, requires a live internet connection, and burns OAuth quota. A `GOALDY_STORAGE=local` environment variable bypasses Drive entirely and reads/writes a `goaldy.db` file from a local path.
+
+**Environment variables (`.env.local` only — never production):**
+
+```bash
+GOALDY_STORAGE=local
+GOALDY_LOCAL_DB_PATH=/Users/nisan/Desktop/goaldy.db
+```
+
+**How it works:**
+
+```
+Dev mode (GOALDY_STORAGE=local):
+  App starts
+  → tRPC devLoadLocalDb procedure reads file from GOALDY_LOCAL_DB_PATH
+  → Returns bytes as base64 over localhost
+  → Browser mounts in OPFS — identical to Drive path from here
+  → Every write → devSaveLocalDb → file updated on disk immediately
+  → Drive never touched
+
+Production (GOALDY_STORAGE=drive, the default):
+  App starts
+  → Downloads goaldy.db from Drive appDataFolder
+  → Mounts in OPFS
+  → Every write → queued Drive upload
+  → GOALDY_LOCAL_DB_PATH ignored entirely
+```
+
+**The storage abstraction** (`apps/web/lib/db/opfs.ts`):
+
+```typescript
+async function initDatabase(): Promise<SqliteDb> {
+  if (process.env.NEXT_PUBLIC_GOALDY_STORAGE === 'local') {
+    return mountFromLocalFile()   // dev only
+  }
+  return mountFromDrive()         // production
+}
+```
+
+Everything downstream — wa-sqlite, all queries, all feature code — is completely unaware of which source provided the file. One branch at startup, identical behavior everywhere else.
+
+**Dev-only tRPC procedures** (throw in production via `requireDevMode` middleware):
+
+```typescript
+// packages/trpc/routers/drive.ts
+
+devLoadLocalDb: publicProcedure
+  .use(requireDevMode)
+  .query(async () => {
+    const bytes = await fs.readFile(process.env.GOALDY_LOCAL_DB_PATH!)
+    return { bytes: bytes.toString('base64') }
+  }),
+
+devSaveLocalDb: publicProcedure
+  .use(requireDevMode)
+  .input(z.object({ bytes: z.string() }))
+  .mutation(async ({ input }) => {
+    await fs.writeFile(
+      process.env.GOALDY_LOCAL_DB_PATH!,
+      Buffer.from(input.bytes, 'base64')
+    )
+  }),
+```
+
+**The `requireDevMode` middleware** checks `process.env.GOALDY_STORAGE === 'local'` and throws a `FORBIDDEN` tRPC error if called in production. These procedures are never reachable on Vercel.
+
+**Typical development workflow:**
+
+```
+1. Run migration script → ~/Desktop/goaldy.db populated with Buxfer history
+2. Set GOALDY_STORAGE=local + GOALDY_LOCAL_DB_PATH in .env.local
+3. pnpm dev → app loads with full real data, no Drive needed
+4. Build and test features against real data
+5. When ready to test Drive path: flip GOALDY_STORAGE=drive, restart
+6. Deploy to Vercel → production always uses Drive
+```
 
 ---
 
