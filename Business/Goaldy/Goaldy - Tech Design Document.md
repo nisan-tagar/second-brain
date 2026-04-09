@@ -2,8 +2,8 @@
 |Field|Value|
 |---|---|
 |**Created**|2026-04-03|
-|**Last Updated**|2026-04-07 v2.0|
-|**Version**|2.0|
+|**Last Updated**|2026-04-09 v2.1|
+|**Version**|2.1|
 |**Status**|Draft|
 
 ### Change Log
@@ -21,6 +21,7 @@
 |1.8|2026-04-05|Split-blocking CHECK constraint on TRANSFER removed — splits supported on all transaction types; only constraint remaining is single-tag/split mutual exclusivity|
 |1.9|2026-04-05|Postgres schema additions: `waitlist`, `notification_preferences`, `moneyman_account_mappings` tables|
 |2.0|2026-04-07|Local development storage mode added to Section 3: `GOALDY_STORAGE=local` env var bypasses Drive, reads/writes a local `goaldy.db` file via dev-only tRPC procedures; `requireDevMode` middleware prevents production exposure|
+|2.1|2026-04-09|Account View page documented (Section 13): balance card, time horizon selector, running balance logic, edit/archive/restore actions. Multi-Currency section updated: Frankfurter API replaces Bank of Israel/ECB; in-process 1h cache in `packages/trpc/fx.ts`; `base_currency` meta key; `balanceInBase` field added to all account query outputs. Sidebar grouping documented: 1:1 DB-type sections, no liquidity-class aggregation. Buxfer migration script enhancements documented (Section 14): dedup reporting, archived synthetic accounts, opening balance generation.|
 
 ---
 
@@ -928,7 +929,21 @@ These are first-class features, not afterthoughts. No competitor implements them
 
 ### Multi-Currency
 
-The schema supports per-transaction currency. Net worth aggregation converts via ECB/Bank of Israel rates (fetched daily, cached in `goaldy.db` as a rates table). ILS is the base display currency; USD, EUR supported from day one.
+The schema supports per-account and per-transaction currency. Net worth aggregation and sidebar section totals convert each account balance to the user's **base currency** for aggregation.
+
+**FX implementation (`packages/trpc/fx.ts`):**
+- API: **Frankfurter** (`https://api.frankfurter.app/latest?from=<base>`) — free, no API key, ECB-backed, ~30 major currencies
+- Cache: in-process `Map<baseCurrency, { rates, fetchedAt }>` with 1-hour TTL; at most one HTTP request per hour per base currency — no DB storage needed
+- `getExchangeRates(base, foreignCurrencies[])` — fetches all rates in a single call; returns `Record<foreignCurrency, rate>` where `rate = "1 base = X foreign"`
+- `convertToBase(amount, fromCurrency, toCurrency, rates)` — `amount / rate`; passes through unconverted with a warning if rate is missing
+- Base currency: stored as `meta` table key `base_currency` (default `ILS`); read by `getBaseCurrency(db)` helper in `accounts.ts`
+
+**Account query outputs** (`accounts.list`, `accounts.get`, `accounts.listArchived`, `accounts.archive`, `accounts.restore`) include:
+- `balance` — native currency amount (for per-account display)
+- `balanceInBase` — converted to base currency (for sidebar totals and net worth)
+- `baseCurrency` — the base currency code used for conversion
+
+**Net worth** in `transactions.summary` similarly converts each account balance before summing.
 
 ---
 
@@ -962,7 +977,7 @@ The schema supports per-transaction currency. Net worth aggregation converts via
 
 ---
 
-## 13. Buxfer Migration (Day One Priority)
+## 16. Buxfer Migration — Historical Context (Day One Priority)
 
 The builder is User #1. Goaldy is not production-ready until it replaces Buxfer for daily use.
 
@@ -983,7 +998,7 @@ This is Phase 0 work. Nothing else ships until this works.
 
 ---
 
-## 14. Monetization Architecture Hooks (Phase 4 Ready, Unused Now)
+## 17. Monetization Architecture Hooks (Phase 4 Ready, Unused Now)
 
 The subscription and analytics tables exist in Postgres from day one. Feature flags are evaluated at the tRPC layer:
 
@@ -1015,7 +1030,7 @@ Stripe integration wired at Phase 4. The schema is ready. The code is not writte
 
 ---
 
-## 15. Development Phases
+## 18. Development Phases
 
 ### Phase 0 — Foundation (Before Anything Else)
 
@@ -1068,7 +1083,92 @@ Stripe integration wired at Phase 4. The schema is ready. The code is not writte
 
 ---
 
-## 16. What We Are Not Building
+## 13. Account View
+
+### Page Route
+
+`/accounts/[id]` — server component page that awaits `params`, wraps a `'use client'` `AccountView` component loaded with `dynamic(..., { ssr: false })`.
+
+### AccountView Component (`apps/web/app/(app)/accounts/[id]/AccountView.tsx`)
+
+**Balance card** — always visible at top:
+- Account name, type badge, institution
+- Balance in native currency (`account.balance` + `account.currency`)
+- Balance source label
+- Edit button → inline edit form (name, type, currency, institution, `balance_source`, `reported_value`)
+- Archive button (hidden when `account.isClosed === true`)
+
+**Restore banner** — amber `bg-amber-50 border-amber-200` banner shown when `account.isClosed === true`. Contains "Restore Account" button → `accounts.restore` mutation → page refetch (no redirect).
+
+**Archive confirmation modal** — indigo header, warning body, red "Archive" button + "Do Not Archive" text link. On confirm → `accounts.archive` mutation → redirect to `/dashboard`.
+
+### Time Horizon Selector
+
+Single dropdown button with `←` / `→` arrow buttons on each side. Selected period is reflected in the URL via `useSearchParams` + `router.replace` (no full navigation, no scroll reset).
+
+**URL params:** `?range=THIS_MONTH` (named preset) or `?range=CUSTOM&dateFrom=2026-03-01&dateTo=2026-03-31`
+
+**Range keys:**
+
+| Group | Keys |
+|---|---|
+| Calendar | `THIS_WEEK`, `THIS_MONTH`, `THIS_YEAR`, `LAST_WEEK`, `LAST_MONTH`, `LAST_YEAR` |
+| Rolling | `7D`, `30D`, `60D`, `90D`, `180D`, `3M`, `6M`, `12M` |
+| Special | `ALL`, `CUSTOM` |
+
+**`namedRangeToDates(range)`** — computes `{ dateFrom, dateTo }` for named presets relative to today. URL-explicit `dateFrom`/`dateTo` always take priority over computed values.
+
+**`stepRange(range, dateFrom, dateTo, dir: 1 | -1)`** — two branches:
+- Calendar ranges: shift the whole period by one calendar unit; update the range key (e.g. `THIS_MONTH` → `LAST_MONTH` → becomes prior month's `LAST_MONTH` equivalent)
+- Rolling/CUSTOM: shift by the day-count duration; returns `range: 'CUSTOM'`
+- `ALL`: arrows disabled (`canStep = range !== 'ALL'`)
+
+**Button label** via `rangeLabel()`: shows human-readable period name ("April 2026", "Last 30 Days", "Mar 30 – Apr 5").
+
+### Running Balance
+
+Shown as a column in the transaction list when `account.balance_source === 'transactions'` and the list is scoped to a single account.
+
+**Computation** (in `transactions.list` tRPC handler):
+1. Fetch all-time account total (no date filter): `SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ?`
+2. Walk the page rows newest → oldest: `balanceAfter = runningSum; runningSum -= row.amount`
+3. `balanceAfter` is the running balance displayed on each row
+
+This approach is date-filter-agnostic — the most recent transaction's balance always matches the account header card balance.
+
+---
+
+## 14. Buxfer Migration Script (`scripts/migrate-buxfer.ts`)
+
+One-time local migration from Buxfer CSV/TSV exports to `goaldy.db`.
+
+**Input files (from Buxfer full export):**
+- `accounts.csv` — NAME, BALANCE, TYPE, CURRENCY, BANK
+- `tags.csv` — TAG NAME, PARENT TAG NAME
+- `transactions.csv` — UTF-16LE TSV: ID, Date, Description, Currency, Amount, Type, Tags, Account, Status, Memo, IOU
+
+**Steps:**
+1. **Accounts** — maps Buxfer type strings to Goaldy `AccountType`; creates accounts from `accounts.csv` as active (`is_closed = 0`)
+2. **Tags** — topological BFS insert (parents before children); filters utility tags (`added-by-moneyman-etl`, `buxfer-ts-client-ut-mock`)
+3. **Transactions** — deduplication via `SHA-256(date|amount|description|account_id)` stored as `import_hash`; transfer pairs detected from same Buxfer ID with opposite-sign amounts; extra tags stored as `labels` JSON with `tag:` prefix
+4. **Opening balances** — for each active account: `openingAmount = BALANCE_from_csv - SUM(non-opening txs)`; dated one day before earliest transaction; inserts or updates a single "Opening balance" transaction per account
+
+**Synthetic archived accounts** — accounts referenced in `transactions.csv` but absent from `accounts.csv` are created with `is_closed = 1` (archived). These represent closed/disabled accounts that Buxfer no longer exports.
+
+**Dedup report** — after the transaction loop, prints a per-account table of skipped transactions (date, amount, description) for any account with duplicates.
+
+**Overwrite behaviour** — if the output file already exists, it is deleted (along with `-wal`/`-shm` sidecars) before the schema is applied, ensuring idempotent re-runs.
+
+**Usage:**
+```bash
+npx tsx scripts/migrate-buxfer.ts \
+  --input-dir /path/to/buxfer-export \
+  --output ./goaldy.db
+```
+
+---
+
+## 19. What We Are Not Building
 
 Explicit non-goals. These will never be added without a deliberate design decision documented here:
 

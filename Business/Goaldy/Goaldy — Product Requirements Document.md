@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-04-06 v1.10       |
-| **Version**      | 1.10                   |
+| **Last Updated** | 2026-04-09 v1.11       |
+| **Version**      | 1.11                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -21,6 +21,7 @@
 |1.8|2026-04-05|F3.4/F3.5: splits supported on all transaction types including TRANSFER; split-blocking removed from TRANSFER; financial treatment table updated; F3.5 split UI note corrected.|
 |1.9|2026-04-05|F14 added: landing page. F15 added: auth + onboarding. F16 added: session management. F17 added: notification system. Non-goals and phased delivery updated.|
 |1.10|2026-04-06|F2.5 rewritten: full ingestion surface documented — /api/ingest is machine-to-machine only; file imports are browser-only; two auto-detected formats (canonical Goaldy + Moneyman webPost); account mapping via moneyman_account_mappings; OpenAPI spec and Postman collection added as deliverables; Upstash deferred to Phase 2.|
+|1.11|2026-04-09|F1.1 sidebar grouping updated — accounts grouped by exact DB type (no liquidity-class aggregation); active account highlighted. F1.4 FX updated — Frankfurter API replaces Bank of Israel/ECB; base currency read from `meta` table key `base_currency`; in-process 1h cache. F1.5 expanded — Account View detail page documented with balance card, time horizon selector, transaction list, and edit/archive actions. F1.6 added — Account Archive & Restore feature. F3.1 updated — Time Horizon Selector documented (calendar presets, rolling windows, custom range, URL-reflected state, back/next navigation).|
 
 ---
 
@@ -80,21 +81,25 @@ Goaldy is a personal financial intelligence platform for technically sophisticat
 
 #### F1.1 Account Overview
 
-The left sidebar displays all accounts grouped by liquidity class, always visible while in the app. Net Worth total is pinned at the top of the account tree.
+The left sidebar displays all accounts grouped by their exact DB account type (1:1 mapping — no aggregation). Net Worth total is pinned at the top of the account tree.
 
-**Liquidity classes (groups):**
+**Account type sections (one section per type present in the data):**
 
-- Liquid Assets (checking, savings, cash)
-- Investments (brokerage, stock plans, crypto)
-- Locked Funds (pension, קרן השתלמות, long-term savings)
-- Real Estate (property at estimated value)
-- Loans (mortgage, car loan, credit lines)
-- Credit Cards (treated as liabilities)
-- Archived (closed accounts, hidden by default)
+- Checking
+- Savings
+- Credit Cards
+- Investments
+- Loans
+- Real Estate
+- Retirement
+- Manual
+- Archived (closed accounts, collapsed by default, no group balance shown)
 
-Each group is collapsible. State persists across sessions. Clicking any account navigates to its transaction view with account context header showing balance, institution, and currency.
+Each section is collapsible. The active account is highlighted with an indigo background. Individual account balances are shown in their native currency; section totals and Net Worth are shown in the user's base currency (converted via FX rates — see F1.4).
 
-**Net Worth total** clicking navigates to the Net Worth dashboard tab.
+Clicking any account navigates to the Account View (see F1.5).
+
+**Net Worth total** is pinned at the top; clicking navigates to the Net Worth dashboard tab.
 
 #### F1.2 Account Types
 
@@ -118,17 +123,69 @@ Snapshot update is accessible via a prominent "Update Balance" action on any sna
 
 #### F1.4 Multi-Currency
 
-Each account has a base currency. All balances display in their native currency on the account line. The Net Worth total and all aggregations convert to the user's display currency (ILS by default) using daily exchange rates fetched from the Bank of Israel public API (for ILS pairs) and ECB (for EUR/USD pairs), cached in `goaldy.db`.
+Each account has a base currency. Individual account balances are displayed in their native currency. The Net Worth total, section totals, and all aggregations convert to the user's **base currency** (default: `ILS`, stored as `base_currency` in the `meta` table) using exchange rates from the **Frankfurter public API** (`api.frankfurter.app`).
 
-Exchange rates are shown transparently — hovering any converted amount shows the rate used and the date it was fetched.
+**FX details:**
+- Frankfurter is free, requires no API key, and is backed by ECB reference data (~30 major currencies: USD, EUR, GBP, ILS, JPY, CHF, etc.)
+- Rates update once per ECB business day
+- Server-side in-process cache with 1-hour TTL — at most one Frankfurter request per hour per base currency; no additional storage in `goaldy.db`
+- Conversion: `amount_in_base = amount_in_foreign / rate` where `rate` = Frankfurter's `1 base = X foreign`
+- If a rate is unavailable for a currency, the amount is passed through unconverted with a console warning (graceful degradation)
 
-#### F1.5 Account Management
+Future: rate display transparency (hover to show rate and date) is deferred to Phase B.
 
-- Create, edit, archive accounts
+#### F1.5 Account View
+
+Each account has a dedicated Account View page (`/accounts/[id]`) with:
+
+**Header card:**
+- Account name, type, institution
+- Current balance in native currency
+- Balance source indicator (`computed from transactions` or `reported value`)
+- Edit button (opens inline edit form for name, type, currency, institution, balance mode, reported value)
+- Archive button (hidden when account is already archived)
+
+**Time Horizon Selector:**
+A single dropdown button with back/next arrow navigation, reflecting the selected period in the URL (`?range=`, `?dateFrom=`, `?dateTo=`).
+
+Preset groups:
+- **Calendar** — This Week, This Month, This Year, Last Week, Last Month, Last Year (back/next snaps to full calendar periods: month = first–last day, week = Sun–Sat, year = Jan 1–Dec 31)
+- **Rolling** — 7D, 30D, 60D, 90D, 180D, 3M, 6M, 12M (back/next shifts by the window size; becomes CUSTOM after step)
+- **All Time** — no date filter; arrows disabled
+- **Custom** — manual date-from / date-to inputs with Apply button; arrows navigate by the selected duration
+
+The button label reflects the active period (e.g. "April 2026", "Last 30 Days", "Mar 30 – Apr 5").
+
+**Transaction list:**
+- Scoped to this account, filtered by the active time horizon
+- Running balance column shown for `balance_source = 'transactions'` accounts
+- Running balance is chronologically correct regardless of the selected time horizon — computed from the all-time account total, walking newest → oldest
+
+#### F1.6 Account Archive & Restore
+
+Accounts can be archived to remove them from the active account list and net worth without deleting their transaction history.
+
+**Archive flow:**
+- "Archive Account" button in the Account View header (hidden if already archived)
+- Confirmation modal with explicit warning and a red "Archive" button
+- On confirm: `is_closed = 1` in the DB; user is redirected to the dashboard
+- Archived accounts are excluded from `accounts.list` and net worth calculations
+- Archived accounts appear in a collapsed "Archived" section at the bottom of the sidebar (no group balance shown)
+
+**Restore flow:**
+- An amber banner at the top of the Account View indicates the account is archived
+- "Restore Account" button in the banner
+- On confirm: `is_closed = 0`; page reloads showing the account as active
+- No redirect — user stays on the account page
+
+**Accounts with no matching entry in accounts.csv during Buxfer migration** are automatically created as archived (`is_closed = 1`).
+
+#### F1.7 Account Management
+
+- Create, edit, archive/restore accounts
 - Reorder accounts within groups via drag-and-drop
-- Move accounts between groups (changes liquidity class)
+- Move accounts between groups (changes account type)
 - Link an account to a sync connection (SimpleFIN for US banks)
-- View full transaction history per account
 - Export account transactions as CSV
 
 ---
@@ -308,13 +365,17 @@ User confirms → peer hard-deleted → transfer record remains
 
 #### F3.1 Transaction List
 
-The primary workspace for financial data. Accessible globally (all accounts) or scoped to a single account (from sidebar click) or a single tag (from tag detail view).
+The primary workspace for financial data. Accessible globally (all accounts) or scoped to a single account (from the Account View — see F1.5) or a single tag (from tag detail view).
 
 **Columns:** Date · Amount · Description · Merchant · Tag · Account · Status
 
 Note: "Tag" is singular. A transaction has either one tag (covering 100% of the amount) or a split (multiple tags each covering a defined portion that sums to 100%). There is no multi-tag concept — see F3.4.
 
+**Running balance column** — shown only when the list is scoped to a single account with `balance_source = 'transactions'`. The balance is chronologically correct regardless of the active time horizon (computed from the all-time account total; the most recent transaction's balance always matches the account header card balance).
+
 **Default sort:** Date descending. Sortable by any column.
+
+**Time Horizon Selector** — a single dropdown button with back/next arrow navigation, present on the Account View transaction list. Selected period is reflected in the URL (`?range=`, `?dateFrom=`, `?dateTo=`) for shareability and browser history support. See F1.5 for full preset list and navigation behaviour.
 
 **30-Day Forecast section** — pinned at the top of any transaction list, collapsible. Shows upcoming projected transactions based on:
 
