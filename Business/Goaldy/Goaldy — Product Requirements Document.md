@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-04-09 v1.11       |
-| **Version**      | 1.11                   |
+| **Last Updated** | 2026-04-13 v1.12       |
+| **Version**      | 1.12                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -22,6 +22,7 @@
 |1.9|2026-04-05|F14 added: landing page. F15 added: auth + onboarding. F16 added: session management. F17 added: notification system. Non-goals and phased delivery updated.|
 |1.10|2026-04-06|F2.5 rewritten: full ingestion surface documented — /api/ingest is machine-to-machine only; file imports are browser-only; two auto-detected formats (canonical Goaldy + Moneyman webPost); account mapping via moneyman_account_mappings; OpenAPI spec and Postman collection added as deliverables; Upstash deferred to Phase 2.|
 |1.11|2026-04-09|F1.1 sidebar grouping updated — accounts grouped by exact DB type (no liquidity-class aggregation); active account highlighted. F1.4 FX updated — Frankfurter API replaces Bank of Israel/ECB; base currency read from `meta` table key `base_currency`; in-process 1h cache. F1.5 expanded — Account View detail page documented with balance card, time horizon selector, transaction list, and edit/archive actions. F1.6 added — Account Archive & Restore feature. F3.1 updated — Time Horizon Selector documented (calendar presets, rolling windows, custom range, URL-reflected state, back/next navigation).|
+|1.12|2026-04-13|F1 navigation restructured — sidebar reduced to 4 primary items (Dashboard, Transactions, Budgets, Plan) + "More" flyout (Reports, Tags, Rules); user info removed from sidebar footer and moved to UserDropdown in topbar. F8 Goals superseded by F8 Plan — three-pillar financial planning system (Goals & Events, Emergency Savings, Retirement); old Goals feature (Type A/B/C goal types) deprecated and replaced by Plan Items model. New non-goal added: old Goals feature.|
 
 ---
 
@@ -78,6 +79,35 @@ Goaldy is a personal financial intelligence platform for technically sophisticat
 ---
 
 ### F1 — Accounts
+
+#### F1.0 Application Shell — Navigation
+
+**Sidebar (left, always visible):**
+
+The sidebar has two zones:
+1. **Primary navigation** — 4 fixed items, always visible:
+   - Dashboard (house icon)
+   - Transactions (arrows icon)
+   - Budgets (piggy bank icon)
+   - Plan (calendar range icon)
+2. **More flyout** — a "More ▾" button below the 4 primary items. Clicking opens a fixed-position flyout panel to the right of the sidebar showing:
+   - Reports
+   - Tags
+   - Rules
+   Closes on outside click, on navigation, or on Escape. The "More" button is highlighted when the current route matches any More item.
+3. **Account tree** — below navigation, scrollable, shows all non-archived accounts grouped by type with their balances.
+
+The sidebar has **no user footer**. User information (name, avatar, logout) is in the topbar UserDropdown.
+
+**Topbar (top, always visible):**
+
+- Left: breadcrumb / page title
+- Right: **UserDropdown** — avatar circle (indigo, initials) + user name + chevron. Clicking opens a dropdown:
+  - Header: name (bold) + email (muted), non-interactive
+  - Settings (→ /settings)
+  - Preferences (→ /settings/preferences)
+  - Billing (→ /settings/billing)
+  - Log out (red text, calls signOut)
 
 #### F1.1 Account Overview
 
@@ -1028,172 +1058,262 @@ This is more effective than a wizard because the user can move at their own pace
 
 ---
 
-### F8 — Goals
+### F8 — Plan
 
-#### F8.1 Goal Types
+> **Note:** The old Goals feature (F8 v1.11 and earlier — Type A Future Expense, Type B Wealth Accumulation, Type C Debt Payoff) is **deprecated** and replaced by this Plan feature. The old DB table (`goals`) and tRPC router (`goals`) have been removed. All forward planning now uses the Plan pillars documented here.
 
-**Type A: Future Expense** Fund a known upcoming cost. Has a target amount and target date. The system computes the required monthly contribution and assesses feasibility against free cashflow.
+The Plan feature is the primary differentiator of Goaldy — it shifts the app from financial accounting to financial intention. It operates across three independent but interconnected pillars, each with its own tab on the `/plan` route.
 
-Examples: vacation, home renovation, car replacement, school fees, wedding.
+#### F8.1 Goals & Events Tab
 
-**Type B: Wealth Accumulation** Grow toward a long-term financial target. Has a target amount, target date, and an assumed annual yield rate (user-set planning assumption). The system models how much of the target will be covered by asset growth vs required contributions.
+**Purpose:** Model every known future financial event in a 37-year projection, compute whether current savings can fund them all, and provide what-if controls to test different scenarios.
 
-Examples: retirement portfolio target, investment account milestone, property purchase fund.
+##### F8.1.1 Plan Item Model
 
-**Type C: Debt Payoff** Reduce a liability account to zero. Linked to a loan or credit card account. The system shows payoff date at current payment rate and models the impact of extra payments.
+Every plan item is either a **GOAL** or an **EVENT**, unified in the `plan_items` table.
 
-Examples: mortgage payoff, car loan, student loan.
+| Field | Description |
+|---|---|
+| `tier` | `GOAL` or `EVENT` |
+| `name` | Display name |
+| `icon` | Emoji |
+| `trigger_type` | How the year is determined: `YEAR` (explicit calendar year), `AGE` (age of a family member), `RECURRING` (repeating interval) |
+| `trigger_year` | Used with `YEAR` trigger |
+| `trigger_age` | Used with `AGE` trigger — e.g. "child's Bar Mitzvah at age 13" |
+| `member_id` | Family member whose age is used (for `AGE` trigger) |
+| `recurrence_years` | Interval for `RECURRING` items (e.g. car replacement every 7 years) |
+| `recurrence_end_year` | Last year recurring item fires |
+| `amount` | Nominal cost |
+| `duration_years` | Spread cost over N years (default 1) |
+| `saved_amount` | Amount already set aside (reduces required savings) |
+| `is_system` | True for auto-generated items (e.g. emergency fund top-up) — cannot be toggled by user |
+| `tag_id` | Auto-linked tag (`Goals/{name}` or `Events/{name}`) |
+| `is_active` | Soft delete / pause — excluded from projection when false |
 
-#### F8.2 Goal Data Model
+**Distinction between GOAL and EVENT:**
+- **GOAL** — the user is actively saving toward this item. `saved_amount` tracks progress. Progress bar shown. If `saved_amount >= amount`, the goal is fully funded and excluded from the projection.
+- **EVENT** — a known future cost that will be funded at the time (not saved in advance). Inflation-adjusted in the projection.
 
-Each goal has:
+##### F8.1.2 Projection Engine
 
-- Name and type
-- Target amount (Type A and B) or target account (Type C)
-- Target date
-- Linked tag — auto-generated as `Goals/[Goal Name]` on creation (see F8.5)
-- Linked account (optional — for balance tracking alongside tag tracking)
-- Assumed annual yield % (Type B only — planning assumption, not a prediction)
-- Current accumulated amount (derived from tag-linked transactions)
-- Status: active, paused, completed, archived
+The projection runs entirely in the browser (no server round-trip for what-if changes). Engine lives in `packages/schema/plan-engine.ts` (pure TypeScript, no DB imports).
 
-#### F8.3 Goals Planning Cockpit
-
-The main Goals screen. Not a list of cards — a planning surface.
-
-**Header:** Free Cashflow (from Budgets) · Total monthly goal allocation (sum of all active goal required contributions) · Surplus or shortfall
-
-```
-Free Cashflow ₪4,840/mo      Goals require ₪5,470/mo      Shortfall ₪630/mo ⚠
-```
-
-When a shortfall exists, the system generates resolution suggestions derived from actual spending data:
-
-- "Reduce [tag] spending to its budget target: frees ₪X/mo"
-- "Extend [goal] deadline by [N] months: reduces required contribution to ₪X/mo"
-- "Pause [goal]: frees ₪X/mo"
-
-These are tappable suggestions that open the relevant edit panel.
-
-**Goal list sections:**
-
-_Upcoming (next 24 months)_ — Type A goals sorted by target date ascending. Each row: goal name, target date, required/mo, progress bar, status indicator.
-
-_Long-term_ — Type B goals. Each row: goal name, target, yield assumption, projected achievement date, required/mo contribution, status.
-
-_Debt Payoff_ — Type C goals. Each row: account name, current balance, payoff date at current rate, monthly payment, extra payment modeling.
-
-#### F8.4 Goal Detail View
-
-Clicking any goal opens its detail view.
-
-**Type A — Future Expense detail:**
-
-- Progress bar: current accumulated vs target amount
-- Timeline: months remaining / months elapsed
-- Monthly required contribution
-- Cashflow feasibility: "your free cashflow supports this goal" or gap warning
-- Contribution history: monthly bar chart of tagged contributions
-- "What if" adjustments: target amount slider, target date slider — both update the required contribution in real time
-- Linked transactions: all transactions tagged `Goals/[Goal Name]`, with the ability to add splits tagging existing transactions to this goal
-
-**Type B — Wealth Accumulation detail:**
-
-- Current account value (from linked account snapshot)
-- Projected value at target date at assumed yield (deterministic line, no Monte Carlo)
-- Contribution needed to close gap between projected growth and target
-- Yield assumption slider — adjusting yield rate updates projection in real time
-- Disclaimer: "This is a planning assumption, not a prediction. Actual returns will vary."
-
-**Type C — Debt Payoff detail:**
-
-- Current balance (from linked liability account)
-- Payoff date at current minimum payment
-- Interest savings from extra payment — "adding ₪X/month saves ₪Y in interest and pays off N months earlier"
-- Extra payment slider — updates payoff date and interest savings in real time
-- Payment history: monthly bar chart of actual payments
-
-#### F8.5 Auto-Generated Goal Tag Tree
-
-When a goal is created, Goaldy automatically creates a tag subtree:
+**Algorithm (37 years, `startYear` to `startYear + 36`):**
 
 ```
-Goals/                          ← created on first goal if it doesn't exist
-  Goals/Vacation 2026           ← created with the goal
-  Goals/Car Replacement         ← created with the goal
+For each year Y from startYear to startYear + 36:
+  opening_balance = previous closing balance (or startingCapital)
+  investment_return = opening_balance × weightedReturn
+  savings_contribution = monthlySavings × 12
+  draws = sum of all plan items that fire in year Y:
+    - GOALs: max(0, amount - saved_amount)    ← no inflation applied
+    - EVENTs: amount × (1 + inflationRate)^yearsOut  ← inflation-adjusted
+    - RECURRING items fire every N years
+    - AGE items fire when the member reaches trigger_age
+  closing_balance = opening_balance + investment_return + savings_contribution - draws
 ```
 
-The `Goals/` root tag is automatically marked with a goal icon and is excluded from the Expense dashboard's spending breakdown (it's an allocation, not an expense).
+**Output fields:** `years[]` (per-year data), `isSolvent`, `firstDangerYear`, `lowestBalance`, `lowestBalanceYear`, `finalBalance`, `requiredMonthlySavings`.
 
-Goal tags work exactly like all other tags. The user can:
+`requiredMonthlySavings` is found via binary search (40 iterations, accuracy ±₪100): the minimum monthly savings to keep all 37 year-end balances ≥ 0.
 
-- Tag a transfer transaction `Goals/Vacation 2026` to register a contribution
-- Split a single savings transfer across multiple goal tags (F3.4)
-- View all goal contributions in the tag detail view for `Goals/Vacation 2026`
+##### F8.1.3 KPI Cards (Goals & Events tab)
 
-When a goal is completed or archived, its tag is preserved in the tree but marked inactive. Historical contributions remain tagged and visible.
+| Card | Value | Sub-text |
+|---|---|---|
+| Barrel Balance | Sum of investment layer account balances | N linked accounts |
+| Available for Savings | Income − Expenses (12-month trailing) | Shows component amounts |
+| Required Monthly | Binary-search result from projection engine | Shows gap or surplus vs current setting |
+| Plan Status | "Fully Funded" or "Gap Detected" | Lowest balance year or first danger year |
 
-#### F8.6 Goal Lifecycle
+"Barrel Balance" is the user-facing label for the investment layer starting capital.
 
+##### F8.1.4 Projection Chart
+
+37-year area chart (Recharts AreaChart, `type="linear"` for sharp drops at event years). Two fill areas: indigo for positive balance, red for negative (below zero). Reference line at y=0 (dashed red). No legend. Custom tooltip shows: year, family member ages, opening/savings/return/draws/closing cashflow table, per-item draws breakdown.
+
+##### F8.1.5 Projection Controls
+
+Below the chart, 4-column grid:
+1. **Monthly Savings slider** — range ₪1,000–₪40,000 step ₪500. Real-time chart update.
+2. **Starting Capital override** — number input; defaults to actual investment account sum; "↩ Reset" button when overridden.
+3. **Inflation Rate** — segmented buttons: 1.5% / 2.0% / 2.5% / 3.0% / 4.0%. Default 3.0%.
+4. **Return Rates** — per-account return rate inputs; blended weighted average displayed.
+
+##### F8.1.6 Goals Table
+
+Collapsible table of GOAL-tier items. Columns: GOAL (icon + name + SYSTEM badge), SAVED, TARGET, PROGRESS (mini bar), DEADLINE, STATUS, ACTIVE toggle. System items shown in teal, toggle disabled.
+
+When a GOAL is created, a tag `Goals/{name}` is auto-generated (same pattern as the deprecated F8 v1.11 auto-tag).
+
+##### F8.1.7 Events Table
+
+Collapsible table of EVENT-tier items. Columns: EVENT, TRIGGER (human-readable: "Age 13 · Lior", "Every 7 years", "Year 2031"), COST TODAY, LINKED TO (member name or "Family"), ACTIVE toggle.
+
+When an EVENT is created, a tag `Events/{name}` is auto-generated.
+
+##### F8.1.8 Item Templates
+
+10 pre-seeded Israeli life event templates. Inserted idempotently on first `/plan` load via `plan.seedTemplates` mutation.
+
+| Template | Tier | Trigger | Amount hint |
+|---|---|---|---|
+| Bar/Bat Mitzvah | GOAL | AGE 13 (child) | ₪40,000 |
+| Teen Living Costs | EVENT | AGE 18 (child) | ₪2,000/yr × 4 |
+| University | GOAL | AGE 18 (child) | ₪100,000 |
+| Living Support | EVENT | AGE 22 (child) | ₪1,500/yr × 3 |
+| Wedding | GOAL | YEAR | ₪120,000 |
+| Apartment Purchase | GOAL | YEAR | ₪500,000 |
+| Car Replacement | EVENT | RECURRING 7y | ₪80,000 |
+| Family Vacation | EVENT | RECURRING 3y | ₪20,000 |
+| Renovation | EVENT | RECURRING 10y | ₪60,000 |
+| Parent Support | EVENT | RECURRING 1y | ₪12,000 |
+
+##### F8.1.9 System Goal — Emergency Fund Top-Up
+
+When the Emergency Savings pillar is active and there is a gap (current balance < target), a system plan item is auto-generated in memory (not stored in DB) and injected into the item list on the client:
+
+- Name: "Emergency Fund Top-Up"
+- Tier: GOAL
+- Amount: gap amount
+- Saved: current emergency balance
+- `is_system: true` — cannot be deactivated by user
+- Appears in Goals table with teal background and "SYSTEM" badge
+- Included in the 37-year projection
+
+---
+
+#### F8.2 Emergency Savings Tab
+
+**Purpose:** Track whether the user's liquid emergency reserve covers a target number of months of expenses.
+
+##### F8.2.1 Emergency Pillar Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `emergency_pillar_active` | Off | Toggle. When off, no system goal is generated and coverage is not enforced |
+| `emergency_target_months` | 6 | Coverage target in months. Options: 1, 2, 3, 4, 6, 9, 12 |
+
+##### F8.2.2 Coverage Calculation
+
+- **Emergency layer accounts**: user-assigned accounts with `layer = 'emergency'` in `plan_account_layers`
+- **Current balance**: sum of linked emergency account balances
+- **Monthly expenses**: 12-month trailing average from `transactions` table (expenses only, excluding transfers and income)
+- **Coverage months**: `current_balance / avg_monthly_expenses`
+- **Target amount**: `emergency_target_months × avg_monthly_expenses`
+- **Gap**: `max(0, target_amount - current_balance)`
+
+##### F8.2.3 Status States
+
+| Status | Condition | Color |
+|---|---|---|
+| OK | Coverage ≥ target months | Green |
+| WARNING | Coverage ≥ 50% of target | Amber |
+| CRITICAL | Coverage < 50% of target | Red |
+
+##### F8.2.4 KPI Cards (Emergency tab)
+
+Fund Balance · Coverage (N months) · Monthly Expenses (trailing avg) · Gap to Target
+
+##### F8.2.5 Coverage Progress Bar
+
+Visual bar from 0 to target months. Color matches status (green/amber/red). Updates immediately on changing the target-months selection.
+
+When a gap exists, a notice confirms: "System goal 'Emergency Fund Top-Up' (₪X) added to Goals & Events and Horizon projection."
+
+---
+
+#### F8.3 Retirement Tab
+
+**Phase 1 — Accumulation tracking only.** Drawdown modeling, National Insurance income, and survivor benefits are deferred to Phase 2.
+
+**Purpose:** Project each retirement account's balance from now to retirement age and show the aggregate picture.
+
+##### F8.3.1 Retirement Layer Accounts
+
+User assigns accounts with `layer = 'retirement'` in `plan_account_layers`. Each linked account has:
+- `target_return_rate` — assumed annual return (e.g. 5%)
+- `monthly_contribution` — regular monthly deposit (e.g. employer + employee pension contribution)
+
+##### F8.3.2 Projection
+
+For each retirement account, per-year balance:
 ```
-Create  → tag auto-generated, feasibility shown immediately vs free cashflow
-Model   → adjust target / date / yield in detail view before committing
-Track   → cockpit shows status; intelligence feed surfaces signals
-Fund    → savings deposits tagged or split to goal tags; allocation assistant helps
-Review  → period-end shortfall resolution (see F8.7) if contributions fell short
-Adjust  → edit any goal parameter; system shows delta vs prior projection
-Complete → goal reached; celebratory UI moment; freed cashflow flagged
-Archive → moves to history; tag preserved; contributions remain in ledger
+balance_Y = balance_{Y-1} × (1 + target_return_rate) + monthly_contribution × 12
 ```
 
-#### F8.7 Shortfall Resolution
+Years remaining = `retirement_age - (current_year - birth_year_of_self_member)`.
+If `birth_year` is unknown, defaults to 30 years remaining.
 
-When a goal period closes with actual contributions below the required amount, the system does not silently adjust projections. It surfaces an explicit resolution prompt requiring the user to make an active decision.
+##### F8.3.3 Retirement Settings
 
-**Trigger:** period closes (or within 3 days of period end if real-time detection) with `actual_contributions < required_contribution` for any active goal.
+- `retirement_age`: from `plan_settings`. Default: 67.
+- `selfBirthYear`: from the `plan_members` row where `role = 'self'`.
 
-**Batching:** if multiple goals have shortfalls in the same period, they are presented together in a single resolution flow — one modal, one "Apply all." Not separate interruptions per goal.
+##### F8.3.4 KPI Cards (Retirement tab)
 
-**Resolution modal:**
+Current Balance · Projected at Retirement (at age N, year Y) · Years Remaining · Monthly Contributions (combined)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Goal Review — April 2026                                   │
-│                                                             │
-│  2 goals were underfunded this month                        │
-│                                                             │
-│  Car Replacement                                            │
-│  Required ₪2,000  ·  Funded ₪1,200  ·  Short ₪800         │
-│                                                             │
-│  ○  Extend deadline  Mar 2027 → Apr 2027                    │
-│     Monthly contribution stays at ₪2,000                   │
-│                                                             │
-│  ○  Increase contributions                                  │
-│     Keep Mar 2027 · Raise remaining months ₪2,000 → ₪2,089 │
-│                                                             │
-│  ○  One-time miss — no adjustment                           │
-│     Record shortfall, keep original plan                    │
-│     (Choose this if you'll fund the shortfall manually)     │
-│  ─────────────────────────────────────────────────────────  │
-│  Roof Repair                                                │
-│  Required ₪970  ·  Funded ₪0  ·  Short ₪970               │
-│  ○  Extend deadline  ○  Increase contributions  ○  Miss     │
-│                                                             │
-│  [Apply choices]                      [Remind me in 3 days] │
-└─────────────────────────────────────────────────────────────┘
-```
+##### F8.3.5 Accumulation Chart
 
-**The three options:**
+Recharts AreaChart, `type="monotone"`. Shows aggregate balance from today to retirement age. Y-axis formatted as ₪K / ₪M abbreviations.
 
-_Extend deadline_ — target date pushed forward by the minimum number of periods needed to absorb the shortfall at the current contribution rate. Monthly requirement stays the same.
+##### F8.3.6 Account Detail Table
 
-_Increase contributions_ — target date held fixed. The shortfall is distributed across remaining periods, increasing each period's required contribution by the prorated amount. Shows the new required amount before the user commits.
+Per-account breakdown: ACCOUNT, CURRENT, MONTHLY CONTRIB., RETURN %, PROJECTED AT RETIREMENT.
 
-_One-time miss_ — no adjustment to timeline or contribution rate. The shortfall is recorded in goal history as a deliberate miss. Use when the user intends to catch up via a larger contribution in a future period. The intelligence feed monitors whether catch-up happens and resurfaces if it doesn't within 2 periods.
+---
 
-**Deferral handling:** "Remind me in 3 days" is the only deferral option. Maximum two deferrals. After the second deferral, the system automatically applies "Extend deadline" as the safest conservative default and notifies the user that a default resolution was applied. Goals do not remain in unresolved limbo indefinitely.
+#### F8.4 Family Members
 
-**Goal history:** regardless of which option is chosen, every period's contribution amount, required amount, shortfall, and resolution choice is recorded in the goal's history. The detail view can show this as a timeline of funding decisions — useful for understanding how a goal evolved over time.
+The projection engine uses family members to resolve `AGE`-triggered plan items. Members are stored in `plan_members`.
+
+| Field | Description |
+|---|---|
+| `name` | Display name |
+| `role` | `self`, `partner`, `child`, `parent`, `other` |
+| `birth_year` | Used to compute age in any given year |
+
+The member with `role = 'self'` provides the birth year for retirement calculations.
+
+---
+
+#### F8.5 Plan Settings (Singleton)
+
+Stored as a single row in `plan_settings` with `id = 'default'`. Auto-created on first `/plan` load.
+
+| Setting | Default | Description |
+|---|---|---|
+| `monthly_savings` | 0 | Starting value for the savings slider |
+| `inflation_rate` | 0.03 | Default 3% (Israeli inflation assumption) |
+| `return_rate_override` | null | If set, overrides per-account weighted return |
+| `horizon_years` | 37 | 37 years = CY through CY+36 (37 data points) |
+| `start_year` | current year | First year of projection |
+| `emergency_pillar_active` | false | See F8.2 |
+| `emergency_target_months` | 6 | See F8.2 |
+| `retirement_age` | 67 | See F8.3 |
+
+---
+
+#### F8.6 Linked Accounts (Plan Account Layers)
+
+Accounts are linked to pillars via `plan_account_layers`. Each account can only be in one layer (unique constraint on `account_id`).
+
+| Layer | Usage |
+|---|---|
+| `investment` | Starting capital + return modeling for 37-year projection (Goals & Events tab) |
+| `emergency` | Balance counted toward emergency coverage (Emergency tab) |
+| `retirement` | Balance + contributions projected to retirement (Retirement tab) |
+
+---
+
+#### F8.7 Non-Goals (Plan Feature)
+
+- The old Goals feature (savings/debt-payoff/purchase/retirement goal types from PRD v1.11) is removed. There is no migration path — it was pre-launch.
+- Drawdown modeling in retirement (Phase 2)
+- Monte Carlo simulation (not planned)
+- Mortgage/debt payoff modeling (future separate feature)
+- Auto-import of contribution amounts from transactions (Phase 2)
 
 ---
 
@@ -1789,6 +1909,7 @@ These will never be added without a deliberate PRD amendment:
 |Public API for third-party consumers|Ingest API is inbound only|
 |Email/password authentication|Google OAuth only; no credential management|
 |Multi-provider SSO|Google only at MVP; Drive dependency makes this a structural constraint|
+|Old Goals feature (Type A/B/C goal types)|Replaced by F8 Plan pillars; DB table and router removed pre-launch|
 
 ---
 
@@ -1810,11 +1931,11 @@ F5 (AI categorization + triage), F6 (Expense + Income + Net Worth dashboards), F
 
 ### Phase 2 — Intelligence Layer
 
-F6 (Cashflow dashboard), F8 (Goals — Type A and C), F9 (Intelligence feed — anomaly + cashflow + goal cards), F12 (Israeli financial instruments — קרן השתלמות + pension), F13 (SimpleFIN integration, API keys)
+F6 (Cashflow dashboard), F8 (Plan — member management UI, add/edit item sheet, link account sheet), F9 (Intelligence feed — anomaly + cashflow + plan cards), F12 (Israeli financial instruments — קרן השתלמות + pension), F13 (SimpleFIN integration, API keys)
 
 ### Phase 3 — Planning and Depth
 
-F8 (Goals — Type B wealth accumulation), F9 (mortgage refinancing card), F10 (comparison reports, savings rate), F3 (split transactions, 30-day forecast), F7 (budget edit inline history, scheduled column)
+F8 (Plan — Retirement Phase 2: drawdown modeling, National Insurance income, survivor benefits, partner joint retirement), F9 (mortgage refinancing card), F10 (comparison reports, savings rate), F3 (split transactions, 30-day forecast), F7 (budget edit inline history, scheduled column)
 
 ### Phase 4 — Monetization
 

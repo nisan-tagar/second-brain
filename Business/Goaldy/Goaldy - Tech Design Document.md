@@ -2,8 +2,8 @@
 |Field|Value|
 |---|---|
 |**Created**|2026-04-03|
-|**Last Updated**|2026-04-09 v2.1|
-|**Version**|2.1|
+|**Last Updated**|2026-04-13 v2.2|
+|**Version**|2.2|
 |**Status**|Draft|
 
 ### Change Log
@@ -22,6 +22,7 @@
 |1.9|2026-04-05|Postgres schema additions: `waitlist`, `notification_preferences`, `moneyman_account_mappings` tables|
 |2.0|2026-04-07|Local development storage mode added to Section 3: `GOALDY_STORAGE=local` env var bypasses Drive, reads/writes a local `goaldy.db` file via dev-only tRPC procedures; `requireDevMode` middleware prevents production exposure|
 |2.1|2026-04-09|Account View page documented (Section 13): balance card, time horizon selector, running balance logic, edit/archive/restore actions. Multi-Currency section updated: Frankfurter API replaces Bank of Israel/ECB; in-process 1h cache in `packages/trpc/fx.ts`; `base_currency` meta key; `balanceInBase` field added to all account query outputs. Sidebar grouping documented: 1:1 DB-type sections, no liquidity-class aggregation. Buxfer migration script enhancements documented (Section 14): dedup reporting, archived synthetic accounts, opening balance generation.|
+|2.2|2026-04-13|Section 15 added — Plan Feature Architecture: 5 SQLite tables, 17 tRPC procedures, plan-engine.ts pure computation module, migration runner, template seeding, what-if client hook. Section 2 repo structure updated: goals/ → plan/, components/plan/, packages/schema/plan* files. Navigation shell updated: 4-item sidebar + More flyout, UserDropdown in topbar. Three architectural errors from an earlier internal Plan TDD draft corrected and documented. `packages/trpc/routers/goals.ts` deleted; replaced by `plan.ts`.|
 
 ---
 
@@ -145,9 +146,11 @@ goaldy/
 │       │   ├── (app)/          # Protected app shell
 │       │   │   ├── dashboard/
 │       │   │   ├── transactions/
-│       │   │   ├── reports/
-│       │   │   ├── goals/
+│       │   │   ├── reports/    # stub
+│       │   │   ├── plan/       # Plan feature (Goals & Events, Emergency, Retirement)
 │       │   │   ├── budgets/
+│       │   │   ├── tags/       # stub
+│       │   │   ├── rules/      # stub
 │       │   │   └── settings/
 │       │   └── api/
 │       │       ├── trpc/       # tRPC handler
@@ -155,10 +158,12 @@ goaldy/
 │       │       └── auth/       # NextAuth handler
 │       ├── components/
 │       │   ├── ui/             # Primitive components (shadcn/ui base)
-│       │   ├── layout/         # Sidebar, nav, shell
+│       │   ├── layout/         # Sidebar, topbar, UserDropdown, shell
+│       │   ├── plan/           # Plan tab components (12 files — see Section 15)
 │       │   └── features/       # Dashboard, transactions, reports etc
 │       └── lib/
-│           ├── db/             # wa-sqlite + OPFS layer
+│           ├── db/             # wa-sqlite + OPFS layer; migrations.ts
+│           ├── hooks/          # Client hooks (usePlanProjection etc)
 │           ├── drive/          # Google Drive sync
 │           ├── engine/         # Rules engine, dedup, categorization
 │           ├── importers/      # CSV, OFX, Buxfer, Actual parsers
@@ -167,7 +172,13 @@ goaldy/
 ├── packages/
 │   ├── db/                     # Prisma schema + client (app DB)
 │   ├── trpc/                   # tRPC router definitions
+│   │   └── routers/
+│   │       ├── plan.ts         # 17 plan procedures (replaces goals.ts)
+│   │       └── ...
 │   ├── schema/                 # Zod schemas shared across layers
+│   │   ├── plan.ts             # Plan feature schemas + types
+│   │   ├── plan-engine.ts      # Pure computation — no DB imports
+│   │   └── plan-item-templates.ts  # 10 seed templates
 │   └── types/                  # Shared TypeScript types
 ├── tooling/
 │   ├── eslint/
@@ -1165,6 +1176,326 @@ npx tsx scripts/migrate-buxfer.ts \
   --input-dir /path/to/buxfer-export \
   --output ./goaldy.db
 ```
+
+---
+
+## 15. Plan Feature Architecture
+
+### 15.0 Architectural Corrections
+
+> **Note:** An earlier internal Plan TDD draft (v3.0) contained three architectural errors that are corrected here and throughout the implementation:
+>
+> 1. **RLS is not available in SQLite.** The draft mentioned "row-level security policies" on plan tables. SQLite has no row-level security concept — the file itself is the user boundary. All RLS references have been removed. There is nothing to replace them with: isolation is guaranteed by the file.
+> 2. **`user_id` does not exist in SQLite.** The draft included a `user_id` column in `plan_account_layers`. SQLite has no authenticated user context. The anchor for all plan data is `plan_id = 'default'` (a FK to the singleton `plan_settings` row). The `plan_settings` row with `id = 'default'` is the plan-level anchor — its uniqueness is guaranteed by PRIMARY KEY.
+> 3. **Data access uses tRPC, not REST.** The draft specified `/api/plan/*` REST endpoints. All financial data access in Goaldy uses tRPC procedures. The 17 plan procedures are documented in Section 15.3.
+
+---
+
+### 15.1 SQLite Schema — Plan Tables
+
+Five new tables were added to `financial.sql` in schema version 2. All are created in `migrateTo2()` in `apps/web/lib/db/migrations.ts`.
+
+```sql
+-- Singleton plan settings row (id = 'default')
+CREATE TABLE plan_settings (
+  id                       TEXT PRIMARY KEY DEFAULT 'default',
+  monthly_savings          REAL NOT NULL DEFAULT 0,
+  inflation_rate           REAL NOT NULL DEFAULT 0.03,
+  return_rate_override     REAL,
+  horizon_years            INTEGER NOT NULL DEFAULT 37,
+  start_year               INTEGER NOT NULL,
+  emergency_pillar_active  INTEGER NOT NULL DEFAULT 0,  -- BOOL: 0/1
+  emergency_target_months  INTEGER NOT NULL DEFAULT 6,
+  retirement_age           INTEGER,
+  created_at               TEXT NOT NULL,
+  updated_at               TEXT NOT NULL
+);
+
+-- Family members (used for AGE-triggered plan items)
+CREATE TABLE plan_members (
+  id         TEXT PRIMARY KEY,
+  plan_id    TEXT NOT NULL REFERENCES plan_settings(id) DEFAULT 'default',
+  name       TEXT NOT NULL,
+  role       TEXT NOT NULL CHECK (role IN ('self','partner','child','parent','other')),
+  birth_year INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- Unified GOAL + EVENT items
+CREATE TABLE plan_items (
+  id                  TEXT PRIMARY KEY,
+  plan_id             TEXT NOT NULL REFERENCES plan_settings(id) DEFAULT 'default',
+  tier                TEXT NOT NULL CHECK (tier IN ('GOAL','EVENT')),
+  name                TEXT NOT NULL,
+  icon                TEXT,
+  is_system           INTEGER NOT NULL DEFAULT 0,  -- BOOL: system-generated items
+  template_id         TEXT REFERENCES plan_item_templates(id),
+  trigger_type        TEXT NOT NULL CHECK (trigger_type IN ('YEAR','AGE','RECURRING')),
+  trigger_year        INTEGER,   -- used with YEAR
+  trigger_age         INTEGER,   -- used with AGE
+  member_id           TEXT REFERENCES plan_members(id),  -- whose age drives AGE trigger
+  recurrence_years    INTEGER,   -- interval for RECURRING
+  recurrence_end_year INTEGER,   -- last year RECURRING fires
+  amount              REAL NOT NULL,
+  duration_years      INTEGER NOT NULL DEFAULT 1,  -- spread cost over N years
+  saved_amount        REAL NOT NULL DEFAULT 0,     -- already set aside (GOALs)
+  status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','cancelled')),
+  is_active           INTEGER NOT NULL DEFAULT 1,  -- soft delete / pause
+  tag_id              TEXT REFERENCES tags(id),    -- auto-generated on create
+  sort_order          INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+
+-- Read-only seed templates (seeded via plan.seedTemplates mutation)
+CREATE TABLE plan_item_templates (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  name_he      TEXT,   -- Hebrew name
+  icon         TEXT,
+  tier         TEXT NOT NULL CHECK (tier IN ('GOAL','EVENT')),
+  trigger_type TEXT NOT NULL CHECK (trigger_type IN ('YEAR','AGE','RECURRING')),
+  applies_to   TEXT NOT NULL DEFAULT 'self',  -- 'self' | 'child' | 'partner'
+  amount_hint  REAL,
+  sort_order   INTEGER NOT NULL DEFAULT 0
+);
+
+-- Account → pillar assignment (investment / emergency / retirement)
+CREATE TABLE plan_account_layers (
+  id                   TEXT PRIMARY KEY,
+  plan_id              TEXT NOT NULL REFERENCES plan_settings(id) DEFAULT 'default',
+  account_id           TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  layer                TEXT NOT NULL CHECK (layer IN ('investment','emergency','retirement')),
+  target_return_rate   REAL,           -- annual decimal (e.g. 0.05 = 5%)
+  monthly_contribution REAL,           -- regular monthly deposit
+  linked_at            TEXT NOT NULL,
+  UNIQUE(account_id)   -- one account can only be in one layer
+);
+```
+
+**Indexes:**
+
+```sql
+CREATE INDEX idx_plan_items_plan       ON plan_items(plan_id);
+CREATE INDEX idx_plan_items_tier       ON plan_items(tier);
+CREATE INDEX idx_plan_members_plan     ON plan_members(plan_id);
+CREATE INDEX idx_plan_acct_layers_plan ON plan_account_layers(plan_id);
+CREATE INDEX idx_plan_acct_layers_acct ON plan_account_layers(account_id);
+```
+
+**`plan_settings` singleton pattern:** `id = 'default'` is the PRIMARY KEY — there can only ever be one row. `ensureSettings(db)` in the tRPC router auto-inserts it if missing (on `getSettings`, `updateSettings`, and related queries). No explicit unique constraint needed beyond PRIMARY KEY.
+
+**Default `inflation_rate = 0.03` (3%):** Israeli CPI has averaged above 2.5% historically and was significantly higher in recent years. 3% is the more conservative and realistic default for Israeli users.
+
+**`horizon_years = 37`:** The projection covers CY through CY+36 inclusive, producing 37 data points (37 year-end balances). This gives a 36-interval chart. The UI label reads "35-year projection" as a rounded marketing claim; the actual computation is 37 years.
+
+---
+
+### 15.2 Migration Runner
+
+**File:** `apps/web/lib/db/migrations.ts`
+
+```typescript
+export function runMigrations(db: LedgerDB): void
+```
+
+Called immediately after `db.pragma('journal_mode = WAL')` in `openLedger()`. Reads `schema_version` from the `meta` table. If version < 2, runs `migrateTo2(db)`.
+
+`migrateTo2()` uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` for all 5 plan tables and 5 indexes, then updates `meta` SET `value = '2'` WHERE `key = 'schema_version'`. Idempotent — safe to run on any existing ledger.
+
+---
+
+### 15.3 tRPC Procedures — `planRouter`
+
+**File:** `packages/trpc/routers/plan.ts`  
+**Router key:** `plan` (replaces the deprecated `goals` router)
+
+All procedures are `protectedProcedure` — they require an authenticated session.
+
+| Procedure | Type | Description |
+|---|---|---|
+| `plan.getSettings` | query | Fetch `plan_settings`; auto-inserts `id='default'` if missing |
+| `plan.updateSettings` | mutation | Partial update to any `plan_settings` field |
+| `plan.listMembers` | query | All `plan_members` ordered by `birth_year` |
+| `plan.upsertMember` | mutation | Create or update a plan member (id in input → update, omit → create) |
+| `plan.deleteMember` | mutation | DELETE from `plan_members` by id |
+| `plan.listItems` | query | All `plan_items`; optional `tier` filter; `includeInactive: false` by default |
+| `plan.createItem` | mutation | Insert `plan_item`; auto-creates `Goals/{name}` or `Events/{name}` tag |
+| `plan.updateItem` | mutation | Partial update to `plan_item` fields |
+| `plan.toggleItem` | mutation | Flip `is_active`; blocked for `is_system = 1` items (throws FORBIDDEN) |
+| `plan.deleteItem` | mutation | Soft delete: set `is_active = 0` |
+| `plan.listTemplates` | query | Return all `plan_item_templates` |
+| `plan.seedTemplates` | mutation | Insert `PLAN_ITEM_TEMPLATES` if table is empty; idempotent no-op otherwise |
+| `plan.listAccountLayers` | query | `plan_account_layers` JOIN `accounts` for `account_balance` and `account_name` |
+| `plan.upsertAccountLayer` | mutation | Set layer + rates for `account_id`; uses `ON CONFLICT(account_id) DO UPDATE` |
+| `plan.removeAccountLayer` | mutation | DELETE from `plan_account_layers` by `account_id` |
+| `plan.runProjection` | query | Read settings + active items + members from DB; call `runProjection()` from plan-engine; return `ProjectionResult` |
+| `plan.getEmergencySummary` | query | Join emergency-layer accounts; compute `coverageMonths`, `gap`, `targetAmount`; trailing 12-month expense average from `transactions` |
+
+**Helper functions in `plan.ts`:**
+
+- `ensureSettings(db)` — auto-inserts the singleton row if missing
+- `rowToItem(r)` — converts SQLite integer booleans (`is_system`, `is_active`) to TypeScript booleans
+
+---
+
+### 15.4 Plan Engine (`packages/schema/plan-engine.ts`)
+
+**Zero DB imports.** Pure TypeScript computation. Used by both the tRPC `plan.runProjection` query (server-side) and the `usePlanProjection` client hook (browser).
+
+#### `buildExpenseMap`
+
+```typescript
+buildExpenseMap(
+  items:         PlanItem[],
+  members:       PlanMember[],
+  startYear:     number,
+  horizonYears:  number,
+  inflationRate: number,
+): Record<number, ResolvedExpense[]>
+```
+
+Returns a map from year → list of resolved expenses for that year. Resolves trigger types:
+- `YEAR`: fires in `trigger_year`
+- `AGE`: fires when `current_year - member.birth_year === trigger_age`
+- `RECURRING`: fires every `recurrence_years` from the first matching year through `recurrence_end_year` (or horizon)
+
+Expense amounts:
+- **GOALs:** `max(0, amount - saved_amount)` — no inflation; savings already earmarked
+- **EVENTs:** `amount × (1 + inflationRate)^yearsOut` — inflation-adjusted from today
+
+#### `runProjection`
+
+```typescript
+runProjection(params: ProjectionParams): ProjectionResult
+```
+
+37-year simulation loop:
+
+```
+balance = startingCapital
+for year Y in [startYear .. startYear + horizonYears - 1]:
+  opening = balance
+  investReturn = opening × weightedReturn
+  savings = monthlySavings × 12
+  draws = sum of expenses for year Y
+  closing = opening + investReturn + savings - draws
+  isDanger = closing < 0
+  isStress = closing >= 0 && closing < monthlySavings × 18
+  balance = closing
+```
+
+Returns `ProjectionResult`:
+- `years: YearProjection[]` — per-year data for chart and detail table
+- `isSolvent: boolean` — true if no year has `closing < 0`
+- `firstDangerYear: number | null`
+- `lowestBalance: number`
+- `lowestBalanceYear: number`
+- `finalBalance: number`
+- `requiredMonthlySavings: number`
+- `savingsGap: number`
+
+#### `findRequiredMonthlySavings`
+
+Binary search: lo=0, hi=500,000, 40 iterations. Returns `Math.ceil(hi / 100) * 100` (rounds up to nearest ₪100 for display).
+
+#### `computeWeightedReturn`
+
+Balance-weighted average of per-account return rates. Falls back to `0.05` (5%) when total balance = 0.
+
+---
+
+### 15.5 Item Templates (`packages/schema/plan-item-templates.ts`)
+
+Static constant `PLAN_ITEM_TEMPLATES: PlanItemTemplate[]` — 10 Israeli life event templates. Inserted by `plan.seedTemplates` mutation if the `plan_item_templates` table is empty. Seeding is idempotent (checks row count before insert).
+
+Templates use `trigger_type: 'AGE'` with `applies_to: 'child'` for child-centric events (Bar/Bat Mitzvah, university, etc.), `trigger_type: 'RECURRING'` for periodic costs (car, vacation, renovation), and `trigger_type: 'YEAR'` for user-dated goals (wedding, apartment).
+
+---
+
+### 15.6 What-If Client Hook (`apps/web/lib/hooks/usePlanProjection.ts`)
+
+```typescript
+export function usePlanProjection(
+  items:    PlanItem[],
+  members:  PlanMember[],
+  overrides: {
+    monthlySavings:  number
+    startingCapital: number
+    weightedReturn:  number
+    inflationRate:   number
+    startYear:       number
+    horizonYears:    number
+  }
+): ProjectionResult
+```
+
+Calls `runProjection()` inside `useMemo`. Recomputes synchronously (< 5ms for 37 years) on any slider or input change. **No network round-trip** — the what-if experience is instant.
+
+The hook is used by `GoalsEventsTab`. All slider state lives in `GoalsEventsTab` (not in the tRPC cache) so changes are local-only until the user explicitly saves settings.
+
+---
+
+### 15.7 System Goal — In-Memory Injection
+
+The Emergency Fund Top-Up goal is **never stored in the database**. It is computed at render time in `PlanClient.tsx` from `emergencySummary` data and injected into the items array client-side:
+
+```typescript
+const systemGoal = useMemo<PlanItem | null>(() => {
+  if (!settings?.emergency_pillar_active || !emergencySummary) return null
+  const { gap } = emergencySummary
+  if (gap <= 0) return null
+  return {
+    id: 'sys-emergency-topup',
+    is_system: true,
+    tier: 'GOAL',
+    // ... other fields
+    amount: gap,
+    saved_amount: emergencySummary.currentBalance,
+  }
+}, [settings?.emergency_pillar_active, emergencySummary])
+```
+
+This is merged into `allItems` in `GoalsEventsTab` before being passed to `usePlanProjection`. The projection engine treats it as any other GOAL.
+
+---
+
+### 15.8 Navigation Shell Changes
+
+**Sidebar (`apps/web/components/layout/sidebar.tsx`):**
+
+- 4 primary nav items: Dashboard, Transactions, Budgets, Plan
+- "More" flyout for Reports, Tags, Rules (items unlikely to be used daily)
+- Flyout uses `position: fixed` with `getBoundingClientRect()` to escape the sidebar's `overflow: hidden` clipping context
+- No user footer — avatar, name, logout moved to topbar
+
+**Topbar (`apps/web/components/layout/topbar.tsx`):**
+
+- `UserDropdown` component replaces the old name + logout button
+- Dropdown items: Settings, Preferences, Billing, Log out
+- Closes on outside click via `useRef` + `useEffect`
+
+---
+
+### 15.9 Plan Component Tree
+
+```
+apps/web/components/plan/
+  PlanNotif.tsx            # Notification banner (celebrate/success/warning/danger/info/system)
+  TabTemplate.tsx          # Layout: notifications + KPI cards + LinkedAccounts + children
+  LinkedAccounts.tsx       # Collapsible account list with optional return rate inputs
+  GoalsTable.tsx           # Collapsible GOAL-tier items table
+  EventsTable.tsx          # Collapsible EVENT-tier items table
+  HorizonTooltip.tsx       # Custom recharts tooltip (year, ages, cashflow breakdown)
+  ProjectionChart.tsx      # 37-year area chart (recharts, type="linear", dual fill areas)
+  ProjectionControls.tsx   # Savings slider, capital override, inflation buttons, return rates
+  ProjectionDetail.tsx     # Collapsible year-by-year detail table with event/all filter
+  GoalsEventsTab.tsx       # Assembles all above components
+  EmergencyTab.tsx         # Pillar toggle, coverage bar, target selector
+  RetirementTab.tsx        # Accumulation chart + account detail table
+```
+
+Chart library: **Recharts** (added to `@goaldy/web` package).
 
 ---
 
