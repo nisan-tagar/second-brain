@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-04-13 v1.12       |
-| **Version**      | 1.12                   |
+| **Last Updated** | 2026-04-15 v1.13       |
+| **Version**      | 1.13                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -23,6 +23,7 @@
 |1.10|2026-04-06|F2.5 rewritten: full ingestion surface documented — /api/ingest is machine-to-machine only; file imports are browser-only; two auto-detected formats (canonical Goaldy + Moneyman webPost); account mapping via moneyman_account_mappings; OpenAPI spec and Postman collection added as deliverables; Upstash deferred to Phase 2.|
 |1.11|2026-04-09|F1.1 sidebar grouping updated — accounts grouped by exact DB type (no liquidity-class aggregation); active account highlighted. F1.4 FX updated — Frankfurter API replaces Bank of Israel/ECB; base currency read from `meta` table key `base_currency`; in-process 1h cache. F1.5 expanded — Account View detail page documented with balance card, time horizon selector, transaction list, and edit/archive actions. F1.6 added — Account Archive & Restore feature. F3.1 updated — Time Horizon Selector documented (calendar presets, rolling windows, custom range, URL-reflected state, back/next navigation).|
 |1.12|2026-04-13|F1 navigation restructured — sidebar reduced to 4 primary items (Dashboard, Transactions, Budgets, Plan) + "More" flyout (Reports, Tags, Rules); user info removed from sidebar footer and moved to UserDropdown in topbar. F8 Goals superseded by F8 Plan — three-pillar financial planning system (Goals & Events, Emergency Savings, Retirement); old Goals feature (Type A/B/C goal types) deprecated and replaced by Plan Items model. New non-goal added: old Goals feature.|
+|1.13|2026-04-15|UI Position Jargon section added (§1.4). F4.5 Tag Detail View updated — breadcrumb shows leaf segments only, parent tag views aggregate all descendant transactions, tab view toolbar has empty topbar title with breadcrumb in view. F3.1 updated — transaction list tag filter and full URL-param persistence added.|
 
 ---
 
@@ -43,6 +44,46 @@ Goaldy is a personal financial intelligence platform for technically sophisticat
 **Buxfer is the feature baseline, Monarch is the UX baseline.** Buxfer has earned its users through 15 years of financial tool discipline — the tag hierarchy, the budget table, the tag detail drill-down are all worth preserving. Monarch's visual language — clean, modern, professional — is the target aesthetic. Goaldy surpasses both.
 
 **The primary user is User #1.** Every feature that ships must solve a real problem for the builder's own daily financial life. Hypothetical users come second.
+
+### 1.4 UI Position Jargon
+
+This section defines canonical terms for zones and positions within the Goaldy UI. Use these terms consistently in requirements, bug reports, and implementation discussions to avoid ambiguity.
+
+#### Shell Zones (always visible)
+
+| Term | Description |
+|---|---|
+| **Topbar** | The 52 px fixed horizontal bar at the very top of the shell. Contains the current page title (left) and the UserDropdown (right). On views that carry their own identity in the view toolbar (e.g. Tag Detail), the topbar title is intentionally empty. |
+| **Sidebar** | The left vertical navigation panel. Contains the primary nav items, the "More" flyout, and the account tree below. |
+
+#### View Zones (per-page content area)
+
+| Term | Description |
+|---|---|
+| **View toolbar** | The first row inside a page's content area, immediately below the topbar. Contains the page's primary identity and controls. |
+| **Left slot** | Leftmost position of the view toolbar. Contains page identity: title, breadcrumb, or primary filter (e.g. account selector on Dashboard). |
+| **Right slot** | Rightmost position of the view toolbar. **Always occupied by the Horizon Selector** when a time range is relevant to the view. |
+| **KPI row** | The row of stat cards immediately below the view toolbar. Each card shows a single headline metric with a label and optional subtitle. |
+| **Content area** | Everything below the KPI row — charts, tables, lists, and sub-panels. |
+
+#### Horizon Selector Placement Rule
+
+> **The Horizon Selector always occupies the right slot of the view toolbar.** No other control is placed to its right. Other controls (filters, action buttons, breadcrumbs) sit in the left slot or between left and right slots, with a flex spacer pushing the Horizon Selector to the far right.
+
+#### Breadcrumb Convention (Tag Detail and similar hierarchical views)
+
+- The topbar title is **empty** on views that show a breadcrumb in the view toolbar.
+- The breadcrumb reads left-to-right from the hierarchy root to the current item, separated by ` / `.
+- Each ancestor is a clickable link. The current (leaf) item is non-interactive.
+- Tag names in the DB store the full path (e.g. `"Credit Cards / Hadar"`). The breadcrumb displays only the **leaf segment** of each level's name — the part after the last ` / ` — so each hierarchy level appears exactly once with no duplication.
+- Example: tag name `"Real Estate / Bat-Galim / Homeowner Insurance"` with parent `"Real Estate / Bat-Galim"` and grandparent `"Real Estate"` renders as:  
+  `Tags / Real Estate / Bat-Galim / Homeowner Insurance`
+
+#### Parent Tag Aggregation Rule
+
+> **Viewing a parent tag shows all transactions tagged with that tag OR any of its descendants at any depth.** A user landing on "Credit Cards" sees transactions tagged "Credit Cards", "Credit Cards / Hadar", "Credit Cards / Nisan", etc. Stats (cashflow, expense, income) and charts aggregate across the entire subtree. This is implemented via a recursive CTE at the DB layer — no UI workaround needed.
+
+---
 
 ### 1.3 Success Criteria
 
@@ -783,24 +824,23 @@ Additional locales (US English, etc.) follow the same pattern with market-approp
 
 #### F4.5 Tag Detail View
 
-Clicking any tag anywhere in the app navigates to the tag detail screen — a first-class view, not a modal or sidebar panel.
+Clicking any tag anywhere in the app navigates to the tag detail screen — a first-class view, not a modal or sidebar panel. Accessible at `/tags/[id]`.
 
-**Header:** Tag path as clickable breadcrumb (e.g. "All / Housing / Rent (Or Mortgage)") — each level is clickable to navigate up the tree.
+**View toolbar (left slot):** Breadcrumb showing the full hierarchy path from root to current tag. Each ancestor is a clickable link to its own tag detail view. The current tag is the rightmost, non-linked item. Only the leaf segment of each tag's name is shown (no path duplication). Example: `Tags / Credit Cards / Hadar`.
 
-**KPI strip:**
+**View toolbar (right slot):** Horizon Selector — drives all data on the page. Topbar title is intentionally empty (breadcrumb IS the identity).
 
-- This period (current month / selected range)
-- Average / period (last 12 periods, normalized to selected repeat period)
-- Budgeted amount (if budget target set)
-- Available to spend (budgeted minus actual; shown in green/red)
+**KPI row (4 cards):**
+- **Total Cashflow** — net (income − expense) for this tag and all descendants in the selected horizon. Green if positive, red if negative.
+- **Expenses** — total expense for this tag subtree, with percentage share of all spending.
+- **Income** — total income for this tag subtree.
+- **Active Periods** — number of weeks/months/years (whichever is selected for the chart) that had any activity.
 
-**Timeline chart:** Spending curve within the current period, compared to the same period last month. Line chart, two series.
+**Cashflow Over Time chart:** Bar chart groupable by Week / Month / Year. Shows income (green) and expense (red) bars per bucket. Y-axis auto-scales to actual values (no forced "k" suffix for small amounts).
 
-**Trend chart:** 12-period bar chart of actual spending per period for this tag. Horizontal reference line at budget target if set. Period axis adjusts to the tag's configured repeat period (weekly tags show weeks, monthly tags show months).
+**Transaction list:** All transactions tagged with this tag **or any descendant tag at any depth**, filtered to the selected horizon. Reuses the shared TransactionList component. Date filter is reactive — changes to the Horizon Selector immediately update the list with no page reload.
 
-**Transaction list:** All transactions tagged with this tag (primary or secondary), with the 30-Day Forecast section at the top. Full transaction actions available inline.
-
-**Child tags section:** If the tag has children, a mini-table shows each child's contribution to the total for the current period, with a small bar proportional to contribution.
+**Parent tag aggregation:** A parent tag (e.g. "Credit Cards") aggregates all descendant transactions (e.g. "Credit Cards / Hadar", "Credit Cards / Nisan") across all views — stats, chart, and transaction list. Implemented via recursive CTE at the DB layer.
 
 #### F4.6 Tag Tree Transformation
 
