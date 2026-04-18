@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-04-15 v1.13       |
-| **Version**      | 1.13                   |
+| **Last Updated** | 2026-04-18 v1.14       |
+| **Version**      | 1.14                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -24,6 +24,7 @@
 |1.11|2026-04-09|F1.1 sidebar grouping updated — accounts grouped by exact DB type (no liquidity-class aggregation); active account highlighted. F1.4 FX updated — Frankfurter API replaces Bank of Israel/ECB; base currency read from `meta` table key `base_currency`; in-process 1h cache. F1.5 expanded — Account View detail page documented with balance card, time horizon selector, transaction list, and edit/archive actions. F1.6 added — Account Archive & Restore feature. F3.1 updated — Time Horizon Selector documented (calendar presets, rolling windows, custom range, URL-reflected state, back/next navigation).|
 |1.12|2026-04-13|F1 navigation restructured — sidebar reduced to 4 primary items (Dashboard, Transactions, Budgets, Plan) + "More" flyout (Reports, Tags, Rules); user info removed from sidebar footer and moved to UserDropdown in topbar. F8 Goals superseded by F8 Plan — three-pillar financial planning system (Goals & Events, Emergency Savings, Retirement); old Goals feature (Type A/B/C goal types) deprecated and replaced by Plan Items model. New non-goal added: old Goals feature.|
 |1.13|2026-04-15|UI Position Jargon section added (§1.4). F4.5 Tag Detail View updated — breadcrumb shows leaf segments only, parent tag views aggregate all descendant transactions, tab view toolbar has empty topbar title with breadcrumb in view. F3.1 updated — transaction list tag filter and full URL-param persistence added.|
+|1.14|2026-04-18|§1.4 Financial Term Definitions added — Income/Expense (excludes transfers, P&L) vs Inflow/Outflow (includes transfers, per-account cash movement). F1.5 Account View KPI cards now show Inflow/Outflow, not Income/Expense. `transactions.summary` returns both pairs.|
 
 ---
 
@@ -78,6 +79,24 @@ This section defines canonical terms for zones and positions within the Goaldy U
 - Tag names in the DB store the full path (e.g. `"Credit Cards / Hadar"`). The breadcrumb displays only the **leaf segment** of each level's name — the part after the last ` / ` — so each hierarchy level appears exactly once with no duplication.
 - Example: tag name `"Real Estate / Bat-Galim / Homeowner Insurance"` with parent `"Real Estate / Bat-Galim"` and grandparent `"Real Estate"` renders as:  
   `Tags / Real Estate / Bat-Galim / Homeowner Insurance`
+
+#### Financial Term Definitions
+
+Goaldy uses two distinct pairs of money-flow terms. Using them consistently across the UI, code, and docs avoids confusion.
+
+| Term | Includes transfers? | Used where |
+|---|---|---|
+| **Income** | No | P&L analysis, Dashboard KPI row, Tag Detail, Budget |
+| **Expense** | No | P&L analysis, Dashboard KPI row, Tag Detail, Budget |
+| **Inflow** | Yes | Account View KPI cards |
+| **Outflow** | Yes | Account View KPI cards |
+
+**Why the distinction matters:**
+- A transfer between two accounts is not income or expense — it moves money without creating or consuming value.
+- On the Account View, transfers **are** meaningful: a ₪10,000 transfer into a savings account is real inflow for that account even though it does not affect P&L.
+- Using Income/Expense on the Account View would undercount actual cash movement (e.g. a checking account that receives salary + transfers would show only salary as "income").
+
+**Implementation rule:** The `transactions.summary` tRPC procedure returns both pairs. Callers use `income`/`expense` for P&L views and `inflow`/`outflow` for per-account cash movement views. The `inflow`/`outflow` fields are only meaningful when `accountId` is provided; globally they are zero.
 
 #### Parent Tag Aggregation Rule
 
