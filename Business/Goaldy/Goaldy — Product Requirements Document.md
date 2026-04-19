@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-04-18 v1.14       |
-| **Version**      | 1.14                   |
+| **Last Updated** | 2026-04-19 v1.15       |
+| **Version**      | 1.15                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -25,6 +25,7 @@
 |1.12|2026-04-13|F1 navigation restructured — sidebar reduced to 4 primary items (Dashboard, Transactions, Budgets, Plan) + "More" flyout (Reports, Tags, Rules); user info removed from sidebar footer and moved to UserDropdown in topbar. F8 Goals superseded by F8 Plan — three-pillar financial planning system (Goals & Events, Emergency Savings, Retirement); old Goals feature (Type A/B/C goal types) deprecated and replaced by Plan Items model. New non-goal added: old Goals feature.|
 |1.13|2026-04-15|UI Position Jargon section added (§1.4). F4.5 Tag Detail View updated — breadcrumb shows leaf segments only, parent tag views aggregate all descendant transactions, tab view toolbar has empty topbar title with breadcrumb in view. F3.1 updated — transaction list tag filter and full URL-param persistence added.|
 |1.14|2026-04-18|§1.4 Financial Term Definitions added — Income/Expense (excludes transfers, P&L) vs Inflow/Outflow (includes transfers, per-account cash movement). F1.5 Account View KPI cards now show Inflow/Outflow, not Income/Expense. `transactions.summary` returns both pairs.|
+|1.15|2026-04-19|F2.5 ingest updated — `companyId` removed from canonical schema; `account` renamed to `externalAccountId`; account mapping is now source-agnostic (`account_mappings` table, keyed by `{userId, externalAccountId}`). Settings expanded: 6-tab structure documented (Profile & Locale, Security, Integrations, Sync, Notifications, Data); Sync tab: default dashboard account selector, 6 wired sync toggles, full alias CRUD (add/delete); Notifications tab: per-event email toggles for sync.failed, drive.disconnected, session.new_device, weekly.digest; Profile tab: sidebar position Left/Right (cookie-persisted, always defaults to Left). F17 notification preferences UI implemented — Settings → Notifications tab, email channel per-event toggles, persisted to `notification_preferences` table in Postgres.|
 
 ---
 
@@ -325,7 +326,7 @@ Every transaction is assigned an `import_hash` computed from `SHA-256(date + amo
 
 |Format|Detection signal|Who sends it|
 |---|---|---|
-|Canonical Goaldy|Array with `companyId` field|Custom scripts, migration tools|
+|Canonical Goaldy|Array with `externalAccountId` field|Custom scripts, migration tools|
 |Moneyman `webPost`|Array with `"scraped at"` key (space in key name)|Moneyman automated scraper|
 
 **Canonical Goaldy format** — the primary format, modeled on the israeli-bank-scrapers/Buxfer transaction schema:
@@ -338,10 +339,9 @@ Every transaction is assigned an `import_hash` computed from `SHA-256(date + amo
   "originalCurrency": "ILS",
   "chargedAmount": -3065.14,
   "description": "7578 - כרטיסי אשראי לי",
-  "account": "59641",
-  "companyId": "beinleumi",
+  "externalAccountId": "59641",
   "hash": "2026-04-02T21:00:00.000Z_-3065.14_...",
-  "uniqueId": "2026-04-03_beinleumi_59641_-3065.14_8547",
+  "uniqueId": "2026-04-03_59641_-3065.14_8547",
   "status": "completed"
 }]
 ```
@@ -373,7 +373,7 @@ Moneyman config (zero additional configuration required beyond URL and API key):
 }
 ```
 
-**Account mapping** — both formats identify accounts by institution ID (`companyId`) and account key (`account` field), not by Goaldy UUID. The mapping from `{companyId, account}` → Goaldy account UUID is stored in Postgres (`moneyman_account_mappings`) and managed in Settings → Integrations → Moneyman Accounts. Transactions arriving with no matching mapping are queued as unmapped — never silently dropped — and surfaced in the triage banner for the user to resolve.
+**Account mapping** — both formats identify accounts by `externalAccountId` (a raw account number or identifier from the source). The mapping from `externalAccountId` → Goaldy account UUID is stored in Postgres (`account_mappings`, keyed by `{userId, externalAccountId}`) and managed in Settings → Sync → Account Mappings. The mapping is source-agnostic — REST API, Moneyman webhooks, and custom scripts all use the same table. Transactions arriving with no matching mapping are queued as unmapped — never silently dropped — and surfaced in the triage banner for the user to resolve.
 
 **Response:**
 
@@ -1884,7 +1884,7 @@ const notificationService = new NotificationService([
 // new TelegramProvider({ ... })
 ```
 
-User notification preferences are stored in Postgres (`notification_preferences` table: user_id, channel, event_type, enabled). Users manage preferences in Settings → Notifications.
+User notification preferences are stored in Postgres (`notification_preferences` table: user_id, channel, event_type, enabled). Users manage preferences in Settings → Notifications. **Implemented:** The Settings → Notifications tab is live — 4 email toggles (one per event type), read from and persisted to `notification_preferences` via the `settings.updateNotificationPref` tRPC mutation. Defaults to enabled when no row exists.
 
 #### F17.2 Notification Events
 

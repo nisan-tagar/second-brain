@@ -2,8 +2,8 @@
 |Field|Value|
 |---|---|
 |**Created**|2026-04-03|
-|**Last Updated**|2026-04-13 v2.2|
-|**Version**|2.2|
+|**Last Updated**|2026-04-19 v2.3|
+|**Version**|2.3|
 |**Status**|Draft|
 
 ### Change Log
@@ -23,6 +23,7 @@
 |2.0|2026-04-07|Local development storage mode added to Section 3: `GOALDY_STORAGE=local` env var bypasses Drive, reads/writes a local `goaldy.db` file via dev-only tRPC procedures; `requireDevMode` middleware prevents production exposure|
 |2.1|2026-04-09|Account View page documented (Section 13): balance card, time horizon selector, running balance logic, edit/archive/restore actions. Multi-Currency section updated: Frankfurter API replaces Bank of Israel/ECB; in-process 1h cache in `packages/trpc/fx.ts`; `base_currency` meta key; `balanceInBase` field added to all account query outputs. Sidebar grouping documented: 1:1 DB-type sections, no liquidity-class aggregation. Buxfer migration script enhancements documented (Section 14): dedup reporting, archived synthetic accounts, opening balance generation.|
 |2.2|2026-04-13|Section 15 added — Plan Feature Architecture: 5 SQLite tables, 17 tRPC procedures, plan-engine.ts pure computation module, migration runner, template seeding, what-if client hook. Section 2 repo structure updated: goals/ → plan/, components/plan/, packages/schema/plan* files. Navigation shell updated: 4-item sidebar + More flyout, UserDropdown in topbar. Three architectural errors from an earlier internal Plan TDD draft corrected and documented. `packages/trpc/routers/goals.ts` deleted; replaced by `plan.ts`.|
+|2.3|2026-04-19|Postgres schema: `moneyman_account_mappings` renamed to `account_mappings`; `companyId`/`accountKey` fields removed and replaced with single `externalAccountId` field (unique per user — no institution prefix required). Ingest canonical schema: `companyId` removed, `account` renamed to `externalAccountId`. User model additions: `sidebarPosition`, `defaultAccountId`, `syncIncludePending`, `syncAutoTag`, `syncPending`, `syncBalances`, `syncOnLogin`, `syncPrettify`. Settings tRPC router extended: `updateSyncPrefs`, `updateNotificationPref`, `createAccountMapping`, `deleteAccountMapping` procedures added. Settings UI: Notifications tab added (email toggle per event type); Sync tab wired with persistence; alias CRUD (add/delete), default account selector, sidebar position selector.|
 
 ---
 
