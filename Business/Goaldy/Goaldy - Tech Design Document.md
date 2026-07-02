@@ -1,1518 +1,1095 @@
+# Goaldy Tech Design — Self-Hosted Personal Finance
 
-|Field|Value|
-|---|---|
-|**Created**|2026-04-03|
-|**Last Updated**|2026-04-19 v2.3|
-|**Version**|2.3|
-|**Status**|Draft|
+| Field            | Value                |
+| ---------------- | -------------------- |
+| **Created**      | 2026-06-07           |
+| **Last Updated** | 2026-07-02           |
+| **Version**      | 4.1 (implementation reconciliation) |
+| **Status**       | Active               |
 
-### Change Log
+> **Reset note:** Reset to a clean, forward-looking baseline on 2026-06-07. All prior architecture models (cloud encryption relay, wa-sqlite/OPFS, Google Drive sync, Postgres metadata, Free/Pro tiers) are **superseded and dropped**. This document describes exactly one architecture: a single-user, self-hosted app where a Node backend owns one SQLite file containing financial data, user settings, and preferences. The changelog starts here.
 
-|Version|Date|Change|
-|---|---|---|
-|1.0|2026-04-03|Initial tech design — all 11 pillars + 8 additions from design review|
-|1.1|2026-04-03|Replaced `pending_sync` table with encrypted blob queue pattern (Section 4 + Ingest Surface A/B); generalised pattern to all async ingest sources|
-|1.2|2026-04-03|Elevated architectural thesis to Section 0 — Model 4 differentiation table, one-sentence pitch, full flow diagram|
-|1.3|2026-04-05|SQLite schema updated: `transaction_tags` join table removed; `tag_id` moved to `transactions` row; `transaction_splits` replaces join table for split case; `labels` JSON column added to `transactions`; `is_income` removed from `tags`; full budget configuration columns added to `tags` table|
-|1.4|2026-04-05|Transfer detection added: `transfer_review` table added to SQLite schema; transfer detection pass added to ingest pipeline with TypeScript pseudocode; no `type` field on transactions — transfers are a UI state resolved by deletion, not a data type|
-|1.5|2026-04-05|Transfer model corrected: `type TEXT` field added to transactions ('normal' or 'transfer'); `transfer_source_account_id` and `transfer_dest_account_id` added; ingest pipeline updated — transfer detection is user-initiated on save, not automatic; `findTransferPeer` function replaces batch detection; CSV advisory-only background pass documented|
-|1.6|2026-04-05|`type` field expanded to full 6-value enum: 'expense' \| 'income' \| 'transfer' \| 'refund' \| 'investment' \| 'iou'; schema comments document TYPE/TAG orthogonality and financial treatment per type; split constraint updated — splits blocked on transfer/investment/iou, allowed on expense/income/refund; auto-assignment rules documented in schema comments|
-|1.7|2026-04-05|`type` enum reduced to 3 values: 'expense' \| 'income' \| 'transfer'; REFUND/INVESTMENT/IOU removed and explicitly deferred; CHECK constraint simplified; transfer split-block constraint simplified|
-|1.8|2026-04-05|Split-blocking CHECK constraint on TRANSFER removed — splits supported on all transaction types; only constraint remaining is single-tag/split mutual exclusivity|
-|1.9|2026-04-05|Postgres schema additions: `waitlist`, `notification_preferences`, `moneyman_account_mappings` tables|
-|2.0|2026-04-07|Local development storage mode added to Section 3: `GOALDY_STORAGE=local` env var bypasses Drive, reads/writes a local `goaldy.db` file via dev-only tRPC procedures; `requireDevMode` middleware prevents production exposure|
-|2.1|2026-04-09|Account View page documented (Section 13): balance card, time horizon selector, running balance logic, edit/archive/restore actions. Multi-Currency section updated: Frankfurter API replaces Bank of Israel/ECB; in-process 1h cache in `packages/trpc/fx.ts`; `base_currency` meta key; `balanceInBase` field added to all account query outputs. Sidebar grouping documented: 1:1 DB-type sections, no liquidity-class aggregation. Buxfer migration script enhancements documented (Section 14): dedup reporting, archived synthetic accounts, opening balance generation.|
-|2.2|2026-04-13|Section 15 added — Plan Feature Architecture: 5 SQLite tables, 17 tRPC procedures, plan-engine.ts pure computation module, migration runner, template seeding, what-if client hook. Section 2 repo structure updated: goals/ → plan/, components/plan/, packages/schema/plan* files. Navigation shell updated: 4-item sidebar + More flyout, UserDropdown in topbar. Three architectural errors from an earlier internal Plan TDD draft corrected and documented. `packages/trpc/routers/goals.ts` deleted; replaced by `plan.ts`.|
-|2.3|2026-04-19|Postgres schema: `moneyman_account_mappings` renamed to `account_mappings`; `companyId`/`accountKey` fields removed and replaced with single `externalAccountId` field (unique per user — no institution prefix required). Ingest canonical schema: `companyId` removed, `account` renamed to `externalAccountId`. User model additions: `sidebarPosition`, `defaultAccountId`, `syncIncludePending`, `syncAutoTag`, `syncPending`, `syncBalances`, `syncOnLogin`, `syncPrettify`. Settings tRPC router extended: `updateSyncPrefs`, `updateNotificationPref`, `createAccountMapping`, `deleteAccountMapping` procedures added. Settings UI: Notifications tab added (email toggle per event type); Sync tab wired with persistence; alias CRUD (add/delete), default account selector, sidebar position selector.|
+> **Implementation note (v4.1 — read before the sections below).** The production code implements this exact architecture on the existing **Next.js 15 App Router** app, not a separate Express server + Vite SPA. The mapping is 1:1:
+> - Express routers → **Next.js route handlers** under `apps/web/app/api/*` (full verb coverage, same envelopes).
+> - Express server + middleware → `apps/web/lib/server/*` — `db.ts` (better-sqlite3 owning `goaldy.db`), `auth.ts` (session-cookie + bearer, hashes in `settings`), `http.ts` (`withAuth` guard + envelopes), `openapi.ts`, `ingest.ts`.
+> - Vite React SPA → the **Next.js App Router pages + existing React components**, kept visually unchanged. Data flows through `lib/queries/*` fetch wrappers → the REST API.
+>
+> Everything else in this document holds verbatim: one `goaldy.db` owned by the server, REST for every resource, one auth path, OpenAPI 3.1 + Swagger at `/api/docs`, single Docker image with a `/data` volume, and generated frontend types (`pnpm gen:api-types` → `apps/web/types/api.d.ts`). Where the text below says "Express" or "Vite", read it as the reference shape that these Next.js pieces fulfill. Repo layout is a `pnpm`/`turbo` monorepo: `apps/web` (UI + API + server layer) and `packages/financial-db` (Zod schemas, plan engine, `sql/financial.sql`).
 
 ---
 
-## 0. Governing Philosophy
+## Change Log
 
-Goaldy is a **benevolent dictatorship**. There is one primary user, one opinionated design, and zero committees. Every architecture decision optimizes for: the builder's own daily use first, code clarity and maintainability second, and future monetization headroom third. In that order. When these conflict, that order is the tiebreaker.
-
-The app is **closed source, vibe-coded, and aggressively opinionated**. There is no design-by-committee, no abstract generalization for hypothetical future users, and no premature abstraction. Every layer is chosen because it is the best tool for this specific problem, not because it is popular or safe.
-
-> **Reference implementation:** Actual Budget (`actualbudget/actual`) — MIT licensed, TypeScript, local-first SQLite, well-architected. We study it, borrow liberally where sensible, and deviate deliberately where our model differs.
+| Version | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **4.1** | 2026-07-02 | Implementation reconciliation. Shipped on the existing **Next.js 15 App Router** app rather than Express + Vite: route handlers (`app/api/*`) are the backend, the App Router + existing React UI are the frontend (preserved unchanged). Architecture otherwise as specified — one `better-sqlite3`-owned `goaldy.db`, REST for every resource, session-cookie + bearer auth, OpenAPI 3.1 at `/api/docs`, single Docker image. Deviations from the reference: PATCH-only updates (no PUT); frontend types generated from the spec; the financial schema kept from the prior app rather than §3's proposed tables (to preserve the working UI + money math). See the v4.1 implementation note at the top. |
+| **4.0** | 2026-06-07 | Clean baseline. Stack: Node.js + Express, React (Vite), one SQLite file (financial data + settings + preferences), Docker. REST API for every resource with full verb coverage (GET/POST/PATCH/PUT/DELETE). Bearer-token + session auth share one path. `POST /api/transactions` is the batch, idempotent ingest primitive. OpenAPI 3.1 spec + Swagger UI required deliverable, served at `/api/docs`. All prior history collapsed and dropped. |
 
 ---
 
-### The Architectural Thesis — Why This Design Exists
+## 0. Architectural Philosophy
 
-There are three existing models in the personal finance space. Goaldy is none of them — it is a fourth model that takes the best property of each without their core liability.
+**No cleverness. No premature optimization. No microservices.**
 
-**Model 1 — Full Cloud SaaS** (Monarch, Buxfer, YNAB) The aggregator connects to your bank, writes transactions to their database, your browser reads from their API. Convenient automation. They own your financial history. You are a tenant.
+This is a **single-user financial ledger that one person runs on their own server.** Every architecture decision favors:
 
-**Model 2 — Local-First with Sync Server** (Actual Budget) Data lives in a local SQLite file. A sync server handles automated bank feeds and multi-device access. You own the data — but you either self-host the sync server (real technical burden) or pay for Actual Cloud (back to tenancy). The sync server is load-bearing infrastructure that must be run by someone.
+1. Simplicity (can you explain it in one sentence?)
+2. Speed (all queries < 100ms)
+3. Reliability (no external dependencies)
+4. Deployability (docker-compose up, done)
 
-**Model 3 — File Import Only** (early Actual, YNAB offline) Data is local, no server needed, but automation is manual. You export a CSV, you import it. Acceptable for discipline; unusable for daily convenience.
+**Trade-offs we're making:**
 
-**Model 4 — Goaldy**
+- ✅ **One SQLite file for everything** → financial data, settings, and preferences in a single file the backend owns. No second store, no config service, no env-driven state that isn't reproducible from the file.
+- ✅ Single-user only → eliminates user table, permissions, concurrency
+- ✅ SQLite only → eliminates Postgres, migrations, connection pooling
+- ✅ Bearer + session auth (one path) → eliminates OAuth, JWTs, token refresh complexity
+- ✅ REST API only → eliminates GraphQL, tRPC, API-level complexity
+- ✅ React SPA → eliminates SSR, Next.js routing complexity
+- ✅ Docker first → eliminates deployment decisions
+- ❌ No multi-device sync (user must access from same server)
+- ❌ No offline support (requires server connection)
+- ❌ No scalability (designed for one user, not thousands)
 
-```
-External pipeline       Goaldy server           User's own storage     Browser
-(Moneyman, SimpleFIN)   (stateless function)    (Google Drive)
-        │                       │                       │                 │
-        ▼                       ▼                       ▼                 ▼
-  fetch/receive tx  →  encrypt blob (AES-256) →  goaldy.db (SQLite) → OPFS
-                        write to ingest_blobs    (Drive appDataFolder)  wa-sqlite
-                        (48h TTL, opaque)          ↑                    DuckDB-WASM
-                              │               downloaded on
-                              └──────────────→ session open
-                         claimed + deleted
-                         on browser load
-```
+**These aren't gaps. They're scope boundaries.**
 
-The server is a **stateless encryption relay**. It never stores readable financial data. It holds an encrypted blob for at most 48 hours. The financial system of record is the user's own Google Drive file. All reads and queries run in the browser against a local OPFS copy.
-
-This architecture achieves something no existing PFM tool has managed simultaneously:
-
-|Capability|Monarch / Buxfer|Actual Budget|Goaldy|
-|---|---|---|---|
-|Automated bank sync|✅ (they own infra)|✅ (sync server required)|✅ (blob queue, no server)|
-|User owns financial data|❌|✅|✅|
-|No sync server to maintain|✅ (it's theirs)|❌|✅|
-|REST API for external push|❌|❌|✅|
-|Works fully offline|Partial|✅|✅ (OPFS cache)|
-|Zero readable financial data on dev servers|❌|✅|✅ (encrypted blobs, 48h max)|
-|Minimal GDPR / regulatory surface|❌|✅|✅|
-
-The REST ingest API is the property that most clearly separates Goaldy from Actual. Actual has no external push API — automated sync requires their sync server or self-hosting. Goaldy's `/api/ingest` endpoint makes it a first-class target for Moneyman, custom scripts, and any future integration the user builds, with no server for the user to run and no persistent financial data on Goaldy's infrastructure.
-
-**The one-sentence pitch to a technical Moneyman user:**
-
-> Goaldy gives you automated sync and a full REST API — with your data in your own Google Drive and nothing financial sitting in our database.
-
-Every technical decision in this document flows from that statement.
+**The one-file rule:** everything durable lives in `goaldy.db`. That includes the password hash, the API token hash, display currency, language, date format, column-mapping memory, and every financial row. The only things _not_ in the file are process-level secrets passed at boot (`SESSION_SECRET`, optional seed `API_TOKEN`). Back up the file → back up the app. This is a hard architectural rule, not a convenience.
 
 ---
 
 ## 1. Technology Stack
 
-### The T3 Core
+| Layer          | Technology     | Version    | Why                                              |
+| -------------- | -------------- | ---------- | ------------------------------------------------ |
+| **Backend**    | Node.js        | 20.x LTS   | TS, async, single-threaded is fine for one user  |
+| **Framework**  | Express *(impl: Next.js route handlers)* | — | Reference shape; the app uses Next.js `app/api/*` handlers + `lib/server/*` |
+| **Database**   | SQLite         | 3.x        | Single file, ACID, sub-100ms for one user        |
+| **Frontend**   | React          | 18.x       | Component-driven, familiar, no SSR needed        |
+| **Build (FE)** | Vite *(impl: Next.js App Router)* | — | Reference shape; the app builds with Next.js (`output: standalone`) |
+| **Styling**    | Tailwind CSS   | 3.x        | Utility-first, RTL support, no custom CSS        |
+| **Language**   | TypeScript     | 5.x strict | Type safety everywhere, strict mode              |
+| **API Client** | TanStack Query | 5.x        | Caching, refetching, error handling              |
+| **Deployment** | Docker         | latest     | Single image, runs everywhere                    |
 
-|Layer|Technology|Version Target|Rationale|
-|---|---|---|---|
-|Framework|Next.js App Router|15.x|Server components for auth + metadata shell; client components for all financial UI|
-|API|tRPC|v11|End-to-end type safety without OpenAPI ceremony; monorepo-native|
-|ORM|Prisma|5.x|Self-join tag tree support; clean migrations; strong TS types|
-|Auth|NextAuth.js (Auth.js v5)|5.x|Google OAuth as primary (same account as Drive); email magic link fallback|
-|App DB|Supabase (Postgres)|—|Non-financial metadata only — see Section 4|
-|Styling|Tailwind CSS|3.x|RTL support via `rtl:` variants; design system tokens|
-|Language|TypeScript|5.x strict|Strict mode on. No `any`. No exceptions.|
+**Key dependencies:**
 
-### In-Browser Financial Engine
-
-|Layer|Technology|Rationale|
-|---|---|---|
-|Financial DB|wa-sqlite (WASM)|SQLite in browser via OPFS; sub-ms queries; no server round-trip|
-|Storage target|Origin Private File System (OPFS)|Browser-native private storage; persists across sessions; invisible to user|
-|Analytical queries|DuckDB-WASM|Heavy aggregations — net worth trends, cashflow projections, tag rollups|
-|Drive sync|Google Drive API v3|`appDataFolder` scope; `goaldy.db` blob; upload on write, download on load|
-
-### Infrastructure
-
-|Layer|Technology|Rationale|
-|---|---|---|
-|Hosting|Vercel|Zero-config Next.js; edge functions for ingest API; preview deploys|
-|Queue|Upstash (Redis + QStash)|Background AI categorization jobs; webhook ingest queue|
-|Email|Resend|Magic link auth; sync failure notifications|
-|AI|Anthropic API (Claude claude-sonnet-4-6)|Transaction categorization; intelligence feed generation|
-|Repo|Private GitHub|Single monorepo; no public access|
-|CI|GitHub Actions|Type check → lint → test → deploy on merge to main|
-
-### Key Dependencies (Non-Negotiable)
-
+```json
+{
+  "express": "^4.x",
+  "better-sqlite3": "^9.x",
+  "typescript": "^5.x",
+  "zod": "^3.x",
+  "@asteasolutions/zod-to-openapi": "^7.x",
+  "swagger-ui-express": "^5.x",
+  "bcrypt": "^5.x",
+  "cookie-parser": "^1.x",
+  "date-fns": "^3.x",
+  "react": "^18.x",
+  "react-router": "^6.x",
+  "@tanstack/react-query": "^5.x",
+  "tailwindcss": "^3.x"
+}
 ```
-wa-sqlite          — SQLite WASM runtime
-@sqlite.org/sqlite-wasm — OPFS VFS layer
-@duckdb/duckdb-wasm — analytical query engine  
-@anthropic-ai/sdk  — Claude API client
-googleapis         — Drive API v3
-zod                — runtime validation everywhere (tRPC + ingest API)
-date-fns           — date manipulation (no moment, no dayjs)
-next-intl          — i18n + RTL (see Section 11)
-```
+
+> Frontend dev dependency: `openapi-typescript` (generates `src/types/api.d.ts` from the live spec). `sqlite3` is intentionally omitted — `better-sqlite3` (synchronous) is the only driver.
+
+**Deliberately excluded:**
+
+- ❌ Prisma (SQL is simple enough)
+- ⚠️ Next.js — the reference stack excluded it (no SSR needed), but the implementation **kept the existing Next.js App Router** to preserve the already-built UI. It is used only as a Node server (route handlers) + client-rendered React; there is no financial SSR. This is the one intentional divergence from the reference stack (see v4.1 note).
+- ❌ GraphQL (REST is sufficient)
+- ❌ Docker Compose networking (single container)
+- ❌ Redis / caching layer (SQLite is fast enough)
+- ❌ Load balancing (one user)
+- ❌ Kubernetes (overkill)
 
 ---
 
 ## 2. Repository Structure
 
+> **As-built (v4.1):** the repo is a `pnpm`/`turbo` monorepo, not the `backend/` + `frontend/` split below. The reference tree maps as: `backend/src/api/*` → `apps/web/app/api/*` route handlers; `backend/src/{db,middleware,services}` → `apps/web/lib/server/*` (`db.ts`, `auth.ts`, `http.ts`, `ingest.ts`, `openapi.ts`, `queries/*`); `frontend/src/*` → `apps/web/app` + `apps/web/components` + `apps/web/lib/{queries,hooks,api}`; shared Zod/schema/plan-engine → `packages/financial-db`. The tree below remains the conceptual reference.
+
 ```
 goaldy/
-├── apps/
-│   └── web/                    # Next.js application
-│       ├── app/                # App Router pages
-│       │   ├── (auth)/         # Login, OAuth callback
-│       │   ├── (app)/          # Protected app shell
-│       │   │   ├── dashboard/
-│       │   │   ├── transactions/
-│       │   │   ├── reports/    # stub
-│       │   │   ├── plan/       # Plan feature (Goals & Events, Emergency, Retirement)
-│       │   │   ├── budgets/
-│       │   │   ├── tags/       # stub
-│       │   │   ├── rules/      # stub
-│       │   │   └── settings/
-│       │   └── api/
-│       │       ├── trpc/       # tRPC handler
-│       │       ├── ingest/     # REST ingest endpoint (Moneyman, webhooks)
-│       │       └── auth/       # NextAuth handler
-│       ├── components/
-│       │   ├── ui/             # Primitive components (shadcn/ui base)
-│       │   ├── layout/         # Sidebar, topbar, UserDropdown, shell
-│       │   ├── plan/           # Plan tab components (12 files — see Section 15)
-│       │   └── features/       # Dashboard, transactions, reports etc
-│       └── lib/
-│           ├── db/             # wa-sqlite + OPFS layer; migrations.ts
-│           ├── hooks/          # Client hooks (usePlanProjection etc)
-│           ├── drive/          # Google Drive sync
-│           ├── engine/         # Rules engine, dedup, categorization
-│           ├── importers/      # CSV, OFX, Buxfer, Actual parsers
-│           ├── ai/             # Claude categorization + intelligence feed
-│           └── analytics/      # Client-side event tracking
-├── packages/
-│   ├── db/                     # Prisma schema + client (app DB)
-│   ├── trpc/                   # tRPC router definitions
-│   │   └── routers/
-│   │       ├── plan.ts         # 17 plan procedures (replaces goals.ts)
-│   │       └── ...
-│   ├── schema/                 # Zod schemas shared across layers
-│   │   ├── plan.ts             # Plan feature schemas + types
-│   │   ├── plan-engine.ts      # Pure computation — no DB imports
-│   │   └── plan-item-templates.ts  # 10 seed templates
-│   └── types/                  # Shared TypeScript types
-├── tooling/
-│   ├── eslint/
-│   └── typescript/
-└── turbo.json                  # Turborepo config
+├── backend/
+│   ├── src/
+│   │   ├── server.ts                   # Express app entry
+│   │   ├── db/
+│   │   │   ├── schema.ts               # SQLite schema + init
+│   │   │   ├── queries.ts              # Database operations
+│   │   │   └── types.ts                # TS types for DB
+│   │   ├── api/
+│   │   │   ├── accounts.ts             # GET/POST/PATCH/DELETE /accounts + snapshots
+│   │   │   ├── transactions.ts         # CRUD + batch create + transfer detect
+│   │   │   ├── tags.ts                 # Tags hierarchy + budget config
+│   │   │   ├── budgets.ts              # Budget calculations (derived, read-only)
+│   │   │   ├── rules.ts                # Rules engine + matching + test
+│   │   │   ├── goals.ts                # Goals CRUD
+│   │   │   ├── dashboards.ts           # Dashboard data (expense, income, NW)
+│   │   │   ├── settings.ts             # GET/PATCH settings + preferences
+│   │   │   ├── session.ts              # Login/logout + token show/rotate
+│   │   │   └── openapi.ts              # OpenAPI 3.1 doc builder (from Zod)
+│   │   ├── middleware/
+│   │   │   ├── auth.ts                 # Session cookie OR bearer token
+│   │   │   ├── error.ts                # Error handling
+│   │   │   └── cors.ts                 # CORS if needed
+│   │   ├── services/
+│   │   │   ├── rules-engine.ts         # Apply rules to transactions
+│   │   │   ├── transfer-detector.ts    # Find transfer peers
+│   │   │   ├── import-parser.ts        # CSV/OFX parsing
+│   │   │   ├── exchange-rates.ts       # Currency conversion
+│   │   │   └── validators.ts           # Zod schemas
+│   │   └── utils/
+│   │       ├── logger.ts
+│   │       ├── error.ts
+│   │       └── helpers.ts
+│   ├── migrations/                     # (SQLite doesn't need these, but doc schemas)
+│   ├── Dockerfile
+│   ├── tsconfig.json
+│   ├── package.json
+│   └── .env.example
+│
+├── frontend/
+│   ├── src/
+│   │   ├── main.tsx                    # React entry
+│   │   ├── App.tsx                     # Router setup
+│   │   ├── pages/
+│   │   │   ├── Login.tsx
+│   │   │   ├── Dashboard.tsx           # Main expense/income/NW
+│   │   │   ├── Transactions.tsx        # List + detail
+│   │   │   ├── Accounts.tsx            # Account tree + detail
+│   │   │   ├── Tags.tsx                # Tag hierarchy + detail
+│   │   │   ├── Budgets.tsx             # Budget table + detail
+│   │   │   ├── Import.tsx              # File upload + preview
+│   │   │   ├── Reports.tsx             # Trends, merchants, etc.
+│   │   │   └── Settings.tsx            # Rules, export, etc.
+│   │   ├── components/
+│   │   │   ├── layout/
+│   │   │   │   ├── Sidebar.tsx
+│   │   │   │   ├── Header.tsx
+│   │   │   │   └── MainLayout.tsx
+│   │   │   ├── common/
+│   │   │   │   ├── Button.tsx
+│   │   │   │   ├── Input.tsx
+│   │   │   │   ├── Modal.tsx
+│   │   │   │   ├── Table.tsx
+│   │   │   │   └── Charts.tsx
+│   │   │   ├── accounts/
+│   │   │   ├── transactions/
+│   │   │   ├── tags/
+│   │   │   ├── budgets/
+│   │   │   └── dashboards/
+│   │   ├── hooks/
+│   │   │   ├── useApi.ts               # Wrapper around fetch + TanStack Query
+│   │   │   ├── useAccounts.ts
+│   │   │   ├── useTransactions.ts
+│   │   │   ├── useTags.ts
+│   │   │   └── ...
+│   │   ├── api/
+│   │   │   └── client.ts               # Axios/fetch client config
+│   │   ├── utils/
+│   │   │   ├── format.ts
+│   │   │   ├── calc.ts
+│   │   │   └── helpers.ts
+│   │   ├── types/
+│   │   │   └── index.ts                # Shared types (import from backend)
+│   │   └── App.css                     # Tailwind imports
+│   ├── index.html
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── tailwind.config.js
+│   ├── package.json
+│   └── .env.example
+│
+├── Dockerfile                          # Multi-stage build: backend + frontend
+├── docker-compose.yml
+├── .gitignore
+├── README.md
+└── pnpm-workspace.yaml                 # Monorepo (optional)
 ```
 
 ---
 
-## 3. Financial Data Architecture — The Core Thesis
+## 3. SQLite Database Schema
 
-> **The app does not own the user's financial data. It hydrates from it.**
-
-### The Model
-
-```
-Google Drive (appDataFolder scope)
-  └── goaldy.db                 ← the user's entire financial life
-       └── downloaded to OPFS on app load
-            └── queried in-browser via wa-sqlite
-                 └── uploaded back to Drive on every write
-```
-
-The app is a **stateless shell** relative to financial data. At launch it downloads `goaldy.db` from the user's Drive, mounts it in OPFS, and every subsequent read is local (sub-ms). Every write goes to OPFS first (instant), then queues a Drive upload (background). The UI never waits for Drive.
-
-### Drive Scope
-
-The app requests only `https://www.googleapis.com/auth/drive.appdata` — the `appDataFolder` scope. This creates a hidden folder visible only to the Goaldy app. Users never see it in their Drive UI. The permission dialog reads as narrow and non-threatening, which materially improves signup conversion.
-
-### Offline Behavior
-
-If Drive is unreachable at launch:
-
-1. Check OPFS for an existing `goaldy.db` — if found, load it and display a "working offline" banner
-2. All reads and writes continue against the local OPFS copy
-3. When Drive reconnects, sync the diff (last-write-wins — acceptable for single-user personal finance where simultaneous writes are impossible by design)
-4. If OPFS is empty and Drive is unreachable, display a graceful error — the app cannot function without data on first load
-
-### Single-Session Constraint
-
-**Goaldy does not support concurrent sessions.** This is an explicit, permanent design decision — not a limitation to be engineered away later. One user, one device active at a time. The last-write-wins sync model is only safe under this constraint. No locking primitives, no conflict resolution, no CRDT complexity. The user acknowledges this at onboarding.
-
-Multiple device access is supported sequentially — open on phone, Drive syncs, open on laptop, downloads the latest file. This is the model. It works for personal finance. It does not work for shared household use (multi-user is a Phase 4 problem explicitly deferred).
-
-### Local Development Mode
-
-During development, working against Google Drive is slow, requires a live internet connection, and burns OAuth quota. A `GOALDY_STORAGE=local` environment variable bypasses Drive entirely and reads/writes a `goaldy.db` file from a local path.
-
-**Environment variables (`.env.local` only — never production):**
-
-```bash
-GOALDY_STORAGE=local
-GOALDY_LOCAL_DB_PATH=/Users/nisan/Desktop/goaldy.db
-```
-
-**How it works:**
-
-```
-Dev mode (GOALDY_STORAGE=local):
-  App starts
-  → tRPC devLoadLocalDb procedure reads file from GOALDY_LOCAL_DB_PATH
-  → Returns bytes as base64 over localhost
-  → Browser mounts in OPFS — identical to Drive path from here
-  → Every write → devSaveLocalDb → file updated on disk immediately
-  → Drive never touched
-
-Production (GOALDY_STORAGE=drive, the default):
-  App starts
-  → Downloads goaldy.db from Drive appDataFolder
-  → Mounts in OPFS
-  → Every write → queued Drive upload
-  → GOALDY_LOCAL_DB_PATH ignored entirely
-```
-
-**The storage abstraction** (`apps/web/lib/db/opfs.ts`):
-
-```typescript
-async function initDatabase(): Promise<SqliteDb> {
-  if (process.env.NEXT_PUBLIC_GOALDY_STORAGE === 'local') {
-    return mountFromLocalFile()   // dev only
-  }
-  return mountFromDrive()         // production
-}
-```
-
-Everything downstream — wa-sqlite, all queries, all feature code — is completely unaware of which source provided the file. One branch at startup, identical behavior everywhere else.
-
-**Dev-only tRPC procedures** (throw in production via `requireDevMode` middleware):
-
-```typescript
-// packages/trpc/routers/drive.ts
-
-devLoadLocalDb: publicProcedure
-  .use(requireDevMode)
-  .query(async () => {
-    const bytes = await fs.readFile(process.env.GOALDY_LOCAL_DB_PATH!)
-    return { bytes: bytes.toString('base64') }
-  }),
-
-devSaveLocalDb: publicProcedure
-  .use(requireDevMode)
-  .input(z.object({ bytes: z.string() }))
-  .mutation(async ({ input }) => {
-    await fs.writeFile(
-      process.env.GOALDY_LOCAL_DB_PATH!,
-      Buffer.from(input.bytes, 'base64')
-    )
-  }),
-```
-
-**The `requireDevMode` middleware** checks `process.env.GOALDY_STORAGE === 'local'` and throws a `FORBIDDEN` tRPC error if called in production. These procedures are never reachable on Vercel.
-
-**Typical development workflow:**
-
-```
-1. Run migration script → ~/Desktop/goaldy.db populated with Buxfer history
-2. Set GOALDY_STORAGE=local + GOALDY_LOCAL_DB_PATH in .env.local
-3. pnpm dev → app loads with full real data, no Drive needed
-4. Build and test features against real data
-5. When ready to test Drive path: flip GOALDY_STORAGE=drive, restart
-6. Deploy to Vercel → production always uses Drive
-```
-
----
-
-## 4. Application Database (Postgres via Supabase)
-
-This database holds **zero financial data**. It exists to manage the application layer.
-
-### Schema
-
-```sql
--- Core identity
-users
-  id            uuid PK
-  email         text UNIQUE
-  name          text
-  locale        text DEFAULT 'en'        -- 'en' | 'he'
-  currency      text DEFAULT 'ILS'
-  created_at    timestamptz
-  last_seen_at  timestamptz
-
--- Drive integration
-drive_connections
-  user_id       uuid FK → users
-  access_token  text  (encrypted at rest)
-  refresh_token text  (encrypted at rest)
-  token_expiry  timestamptz
-  drive_file_id text  -- the goaldy.db file ID in Drive
-
--- Ingest API
-api_keys
-  id            uuid PK
-  user_id       uuid FK → users
-  key_hash      text  -- SHA-256 of the key; raw key shown once on creation
-  name          text  -- user-defined label ("Moneyman webhook")
-  last_used_at  timestamptz
-  created_at    timestamptz
-  revoked_at    timestamptz
-
--- Third-party sync tokens (SimpleFIN etc.)
-sync_connections
-  id            uuid PK
-  user_id       uuid FK → users
-  provider      text  -- 'simplefin' | 'future_provider'
-  access_url    text  (encrypted at rest)
-  last_synced_at timestamptz
-  last_error    text
-
--- Monetization hooks (ready from day 1, unused until Phase 4)
-subscriptions
-  user_id             uuid FK → users
-  tier                text DEFAULT 'free'   -- 'free' | 'pro'
-  status              text DEFAULT 'active' -- 'active' | 'cancelled' | 'past_due'
-  stripe_customer_id  text
-  stripe_sub_id       text
-  current_period_end  timestamptz
-
--- Analytics events (privacy-safe, no financial data)
-analytics_events
-  id            uuid PK
-  user_id       uuid FK → users
-  event         text  -- 'import_completed', 'ai_categorization_run', etc.
-  properties    jsonb -- { count: 47, source: 'moneyman' } — never amounts
-  created_at    timestamptz
-
--- Early access waitlist
-waitlist
-  id            uuid PK
-  email         text UNIQUE NOT NULL
-  answer_usage  text        -- "how do you manage finances today?"
-  answer_market text        -- 'il' | 'us' | 'both'
-  invited_at    timestamptz -- NULL until invitation sent
-  invite_token  text UNIQUE -- one-time signup token; NULL after use
-  invite_expires_at timestamptz
-  invite_used_at    timestamptz
-  created_at    timestamptz NOT NULL
-
--- User notification preferences
-notification_preferences
-  id            uuid PK
-  user_id       uuid FK → users
-  channel       text NOT NULL  -- 'email' | 'whatsapp' | 'telegram'
-  event_type    text NOT NULL  -- 'sync.failed' | 'drive.disconnected' |
-                               -- 'session.new_device' | 'weekly.digest'
-  enabled       boolean NOT NULL DEFAULT true
-  UNIQUE (user_id, channel, event_type)
-
--- Async ingest queue (encrypted blobs only — see Section 6)
-ingest_blobs
-  id            uuid PK
-  user_id       uuid FK → users
-  source        text NOT NULL   -- 'simplefin' | 'webhook' | 'api'
-  iv            bytea NOT NULL  -- AES-256-GCM initialisation vector (12 bytes)
-  ciphertext    bytea NOT NULL  -- AES-256-GCM encrypted transaction payload
-  created_at    timestamptz NOT NULL
-  expires_at    timestamptz NOT NULL  -- TTL: created_at + 48h (hard delete by cron)
-  ingested_at   timestamptz          -- set on successful browser ingest; row deleted immediately after
-```
-
-**What is never stored here in plaintext:** transaction amounts, account balances, merchant names, tag assignments, or any readable financial data. The `ingest_blobs` table holds only opaque encrypted ciphertext — Goaldy's Postgres cannot be queried for financial content. All other financial data lives exclusively in `goaldy.db` in Drive.
-
----
-
-## 5. Financial Database Schema (SQLite in OPFS)
-
-This is the schema for `goaldy.db`. Modeled after Actual Budget's `loot-core` schema conventions with deliberate deviations for Goaldy's tag-tree model and snapshot accounts.
+**Single file: `goaldy.db`. ACID compliance. All queries run locally.**
 
 ```sql
 -- Accounts
 CREATE TABLE accounts (
-  id              TEXT PRIMARY KEY,         -- uuid
-  name            TEXT NOT NULL,
-  type            TEXT NOT NULL,            -- 'checking' | 'savings' | 'credit' |
-                                            -- 'investment' | 'loan' | 'manual'
-  liquidity_class TEXT NOT NULL,            -- 'liquid' | 'semi_liquid' | 'illiquid'
-                                            -- | 'locked' | 'liability'
-  currency        TEXT NOT NULL DEFAULT 'ILS',
-  is_manual       INTEGER NOT NULL DEFAULT 0,  -- 1 = snapshot-based, no tx stream
-  institution     TEXT,                     -- 'hapoalim' | 'leumi' | 'chase' | etc
-  is_closed       INTEGER NOT NULL DEFAULT 0,
-  sort_order      INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL
-);
-
--- Account value snapshots (manual accounts only)
-CREATE TABLE account_snapshots (
-  id          TEXT PRIMARY KEY,
-  account_id  TEXT NOT NULL REFERENCES accounts(id),
-  value       REAL NOT NULL,               -- signed; liabilities are negative
-  note        TEXT,
-  snapshot_at TEXT NOT NULL               -- ISO date string
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  type TEXT NOT NULL CHECK (type IN ('checking', 'savings', 'credit_card', 'investment', 'pension', 'real_estate', 'loan', 'manual')),
+  institution TEXT,
+  account_number TEXT,
+  currency TEXT DEFAULT 'ILS',
+  balance REAL DEFAULT 0,
+  color TEXT DEFAULT '#000000',
+  icon TEXT,
+  archived_at TIMESTAMP,
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Transactions
 CREATE TABLE transactions (
-  id              TEXT PRIMARY KEY,         -- uuid
-  account_id      TEXT NOT NULL REFERENCES accounts(id),
-  amount          REAL NOT NULL,            -- signed; expenses/transfers-out negative,
-                                            -- income/refunds/transfers-in positive
-  currency        TEXT NOT NULL DEFAULT 'ILS',
-  date            TEXT NOT NULL,            -- ISO date string YYYY-MM-DD
-  description     TEXT NOT NULL,            -- raw from source
-  merchant        TEXT,                     -- normalized merchant name
-  notes           TEXT,
-  labels          TEXT,                     -- JSON array of strings e.g. '["Tax/Deductible","Reimbursable"]'
-                                            -- no financial impact; filterable only
-  type            TEXT NOT NULL DEFAULT 'expense',
-                  -- 'expense'   → counts in expense reports; tag drives budget line
-                  -- 'income'    → counts in income reports; tag drives budget line
-                  -- 'transfer'  → excluded from all expense/income reports; tag is identification only
-                  --
-                  -- REFUND, INVESTMENT, IOU explicitly deferred — not in scope for current version.
-                  --
-                  -- TYPE and TAG are fully orthogonal. Every type can carry a tag.
-                  -- TYPE controls financial treatment. TAG controls categorization.
-                  -- Auto-assigned on import: amount < 0 → 'expense', amount > 0 → 'income',
-                  -- provider transfer metadata → 'transfer'. Always user-overridable.
-  tag_id          TEXT REFERENCES tags(id), -- NULL if untagged or split
-                                            -- meaningful on all transaction types
-                                            -- mutually exclusive with transaction_splits rows
-  -- Transfer fields (populated only when type = 'transfer')
-  transfer_source_account_id TEXT REFERENCES accounts(id),
-  transfer_dest_account_id   TEXT REFERENCES accounts(id),
-  import_hash     TEXT UNIQUE,             -- SHA-256(date|amount|description|account_id)
-  status          TEXT NOT NULL DEFAULT 'cleared', -- 'cleared' | 'pending'
-  source          TEXT NOT NULL,           -- 'moneyman' | 'simplefin' | 'csv' |
-                                           -- 'ofx' | 'api' | 'manual'
-  category_source TEXT NOT NULL DEFAULT 'untagged', -- 'rule' | 'ai' | 'user' | 'untagged'
-  ai_confidence   REAL,                    -- 0.0-1.0; set by Claude on AI categorization
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL,
-  -- Constraints
-  CHECK (type IN ('expense', 'income', 'transfer')),
-  CHECK (
-    -- single-tag and split are mutually exclusive
-    tag_id IS NULL OR NOT EXISTS (
-      SELECT 1 FROM transaction_splits WHERE transaction_id = id
-    )
-  )
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  date DATE NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('expense', 'income', 'transfer')),
+  amount REAL NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'ILS',
+  description TEXT,
+  merchant TEXT,
+  tag_id TEXT REFERENCES tags(id),
+  status TEXT DEFAULT 'cleared' CHECK (status IN ('cleared', 'pending')),
+  transfer_source_id TEXT REFERENCES accounts(id),
+  transfer_dest_id TEXT REFERENCES accounts(id),
+  labels JSON DEFAULT '[]',
+  notes TEXT,
+  import_hash TEXT UNIQUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CHECK ((tag_id IS NOT NULL AND transfer_source_id IS NULL) OR (type = 'transfer'))
 );
 
--- Transaction splits (used when tag_id IS NULL and amount must be fully allocated)
--- Replaces the old transaction_tags join table entirely
--- Each split is an independent budget unit with its own tag and amount
-CREATE TABLE transaction_splits (
-  id              TEXT PRIMARY KEY,
-  transaction_id  TEXT NOT NULL REFERENCES transactions(id),
-  amount          REAL NOT NULL,            -- signed; must sum to parent transaction amount
-  description     TEXT,                    -- optional label for this split line
-  tag_id          TEXT NOT NULL REFERENCES tags(id),
-  sort_order      INTEGER NOT NULL DEFAULT 0
-  -- CHECK: sum of splits = parent amount is enforced at application layer
-  -- SQLite cannot reference other rows in a CHECK constraint
+-- Splits (multiple tags for one transaction)
+CREATE TABLE splits (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id),
+  split_data JSON NOT NULL,  -- [{ tag_id: "...", amount: 100.50 }, ...]
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tag tree (arbitrary depth via adjacency list)
--- Tag is the source of truth for classification AND budget configuration
+-- Tags (hierarchical)
 CREATE TABLE tags (
-  id               TEXT PRIMARY KEY,
-  parent_id        TEXT REFERENCES tags(id),  -- NULL = root tag
-  name             TEXT NOT NULL,
-  color            TEXT,                       -- hex, for UI display
-  icon             TEXT,                       -- emoji or icon key
-  sort_order       INTEGER NOT NULL DEFAULT 0,
-  -- Budget configuration (all nullable — absence means no budget target)
-  budget_amount    REAL,                       -- target per repeat period
-  budget_type      TEXT,                       -- 'expense' | 'income'
-                                              -- inferred from cash flow if null
-  budget_period    TEXT,                       -- 'weekly' | 'biweekly' | 'monthly' |
-                                              -- 'quarterly' | 'annually' | 'custom'
-  budget_custom_days INTEGER,                  -- used when budget_period = 'custom'
-  budget_start_date TEXT,                      -- ISO date
-  budget_rollover  INTEGER NOT NULL DEFAULT 0, -- 1 = unused carries to next period
-  budget_end_date  TEXT,                       -- optional; NULL = ongoing
-  budget_account_id TEXT REFERENCES accounts(id), -- optional account scope
-  created_at       TEXT NOT NULL
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  parent_id TEXT REFERENCES tags(id),
+  color TEXT DEFAULT '#000000',
+  icon TEXT,
+  sort_order INTEGER DEFAULT 0,
+  -- Budget config
+  budget_amount REAL,
+  budget_type TEXT CHECK (budget_type IN ('expense', 'income')),
+  budget_period TEXT CHECK (budget_period IN ('weekly', 'biweekly', 'monthly', 'quarterly', 'custom')),
+  budget_start_date DATE,
+  budget_end_date DATE,
+  budget_rollover BOOLEAN DEFAULT false,
+  budget_account_scope TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- note: is_income removed from tags. Income/expense classification for the
--- Budgets screen is determined by budget_type on the tag's budget configuration,
--- or inferred from dominant transaction direction when budget_type is null.
+-- Account snapshots (for investments, property, pension)
+CREATE TABLE snapshots (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  value REAL NOT NULL,
+  date DATE NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
--- Categorization rules
+-- Rules (merchant pattern → tag)
 CREATE TABLE rules (
-  id            TEXT PRIMARY KEY,
-  target_tag_id TEXT NOT NULL REFERENCES tags(id),
-  priority      INTEGER NOT NULL DEFAULT 0,   -- lower number = higher priority
-  match_mode    TEXT NOT NULL DEFAULT 'all',  -- 'all' | 'any'
-  match_count   INTEGER NOT NULL DEFAULT 0,   -- incremented on every match
-  last_matched_at TEXT,                        -- ISO datetime; NULL = never matched
-  created_at    TEXT NOT NULL
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  pattern_type TEXT CHECK (pattern_type IN ('contains', 'regex', 'amount_gte', 'amount_lte')),
+  pattern_value TEXT NOT NULL,
+  tag_id TEXT NOT NULL REFERENCES tags(id),
+  enabled BOOLEAN DEFAULT true,
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Rule conditions (structured, queryable)
-CREATE TABLE rule_conditions (
-  id        TEXT PRIMARY KEY,
-  rule_id   TEXT NOT NULL REFERENCES rules(id),
-  field     TEXT NOT NULL,    -- 'description' | 'merchant' | 'amount' | 'account_id'
-  operator  TEXT NOT NULL,    -- 'contains' | 'equals' | 'starts_with' |
-                              -- 'greater_than' | 'less_than' | 'matches_regex'
-  value     TEXT NOT NULL
+-- Exchange rates (cached)
+CREATE TABLE exchange_rates (
+  id TEXT PRIMARY KEY,
+  from_currency TEXT NOT NULL,
+  to_currency TEXT NOT NULL,
+  rate REAL NOT NULL,
+  date DATE NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(from_currency, to_currency, date)
 );
 
--- Goals
+-- Sessions (one row per browser login)
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  user_agent TEXT,
+  ip_address TEXT,
+  last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL
+);
+
+-- Goals (basic Type A savings goal for Phase 0)
 CREATE TABLE goals (
-  id            TEXT PRIMARY KEY,
-  name          TEXT NOT NULL,
-  type          TEXT NOT NULL,          -- 'savings' | 'debt_payoff' | 'purchase' | 'retirement'
-  target_amount REAL,
-  target_date   TEXT,                   -- ISO date
-  linked_account_id TEXT REFERENCES accounts(id),
-  linked_tag_id TEXT REFERENCES tags(id),
-  notes         TEXT,
-  created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  target_amount REAL NOT NULL,
+  target_date DATE,
+  tag_id TEXT REFERENCES tags(id),
+  current_amount REAL DEFAULT 0,
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'completed', 'abandoned')),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Intelligence feed cards (persisted state)
-CREATE TABLE insight_cards (
-  id          TEXT PRIMARY KEY,
-  type        TEXT NOT NULL,   -- 'anomaly' | 'cashflow' | 'goal' | 'israeli' | 'offer'
-  title       TEXT NOT NULL,
-  body        TEXT NOT NULL,
-  priority    INTEGER NOT NULL DEFAULT 0,
-  is_read     INTEGER NOT NULL DEFAULT 0,
-  is_dismissed INTEGER NOT NULL DEFAULT 0,
-  valid_until TEXT,
-  created_at  TEXT NOT NULL
+-- Settings (single-row key/value store: password hash, API token hash, prefs)
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- Transfer detection candidates (transient — resolved by user action, then deleted)
-CREATE TABLE transfer_review (
-  id            TEXT PRIMARY KEY,
-  tx_a_id       TEXT NOT NULL REFERENCES transactions(id),
-  tx_b_id       TEXT NOT NULL REFERENCES transactions(id),
-  confidence    TEXT NOT NULL,   -- 'high' | 'medium'
-  created_at    TEXT NOT NULL
-);
-
--- Schema version (for migrations)
-CREATE TABLE meta (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-INSERT INTO meta VALUES ('schema_version', '1');
-
--- Indexes
-CREATE INDEX idx_transactions_account ON transactions(account_id);
-CREATE INDEX idx_transactions_date ON transactions(date);
-CREATE INDEX idx_transactions_hash ON transactions(import_hash);
-CREATE INDEX idx_transactions_tag ON transactions(tag_id);
-CREATE INDEX idx_transaction_splits_tx ON transaction_splits(transaction_id);
-CREATE INDEX idx_tags_parent ON tags(parent_id);
-CREATE INDEX idx_rule_conditions_rule ON rule_conditions(rule_id);
-CREATE INDEX idx_transfer_review_a ON transfer_review(tx_a_id);
-CREATE INDEX idx_transfer_review_b ON transfer_review(tx_b_id);
+-- Reserved keys: 'password_hash', 'api_token_hash', 'display_currency', 'language', 'date_format'
 ```
+
+**Key design decisions:**
+
+- Single user → no user table
+- `import_hash` prevents duplicates (SHA-256 of date + amount + description)
+- `type = 'transfer'` is atomic, no splits
+- `tag_id` is nullable for transfers
+- Budget config lives on tags (not separate table)
+- Exchange rates cached to avoid API calls on every conversion
+- `settings` holds the bcrypt password hash and the hashed API bearer token — no user table needed
+- The API token is the integration credential; it and the session cookie share one auth path
 
 ---
 
-## 6. Data Ingestion Architecture
+## 4. Backend Architecture
 
-Goaldy does not provision financial integrations. It exposes surfaces for the user's own pipelines to push data into. All financial data written through any ingest path lands directly in `goaldy.db` in OPFS — it never touches Goaldy's servers in transit.
-
-### Ingest Pipeline (Common to All Sources)
-
-```
-Raw input (any format)
-  → Parser (source-specific normalizer)
-  → Zod schema validation
-  → Dedup check (import_hash lookup against SQLite)
-  → CSV transfer hint pass (best-effort, background, CSV imports only — see below)
-  → Rules engine (structured condition matching — skips type='transfer')
-  → Unmatched queue (normal transactions with no rule match)
-  → AI categorization batch (Claude, background, Upstash queue)
-  → Write to SQLite (wa-sqlite, OPFS)
-  → Background Drive upload (non-blocking)
-```
-
-**Transfer handling — user-initiated, not automatic:**
-
-Transfers are resolved by the user explicitly marking a transaction as TYPE = TRANSFER via the Edit Transaction panel. This sets `transfer_source_account_id` and `transfer_dest_account_id` on the transaction, then triggers peer detection on save:
+### 4.1 Server Setup
 
 ```typescript
-// packages/engine/transfer-detection.ts
-async function findTransferPeer(
-  tx: Transaction,
-  destAccountId: string,
-  db: SqliteDb
-): Promise<Transaction | TransferCandidate[]> {
+// src/server.ts
+import express from "express";
+import { initDb } from "./db/schema";
+import { authMiddleware } from "./middleware/auth";
+import accountsRouter from "./api/accounts";
+import transactionsRouter from "./api/transactions";
+import tagsRouter from "./api/tags";
+import goalsRouter from "./api/goals";
+// ... more routes
 
-  const candidates = await db.all(`
-    SELECT * FROM transactions
-    WHERE account_id = ?
-      AND ABS(amount) BETWEEN ? AND ?
-      AND amount * ? < 0          -- opposite sign
-      AND date BETWEEN ? AND ?
-      AND type != 'transfer'      -- don't match already-resolved transfers
-    ORDER BY ABS(julianday(date) - julianday(?))  -- closest date first
-  `,
-    destAccountId,
-    Math.abs(tx.amount) * 0.995,   // 0.5% tolerance lower bound
-    Math.abs(tx.amount) * 1.005,   // 0.5% tolerance upper bound
-    tx.amount,
-    addDays(tx.date, -2),
-    addDays(tx.date, +2),
-    tx.date
-  );
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  if (candidates.length === 1) return candidates[0];  // unambiguous match
-  if (candidates.length > 1)  return candidates;      // user selects from list
-  return null;                                         // unmatched — save as external transfer
-}
-```
+// Middleware
+app.use(express.json());
+app.use(express.static("frontend/dist")); // Serve React build
+app.use(authMiddleware); // Protect all /api routes
 
-On peer found: UI presents "Delete matching transaction on [account]? This cannot be undone." User confirms → peer is hard-deleted → transfer record `type = 'transfer'` remains in the ledger. Transfer transactions are excluded from all expense/income/budget calculations at the query layer (`WHERE type != 'transfer'`).
+// Routes
+app.post("/session", sessionController.login);
+app.delete("/session", sessionController.logout);
+app.use("/api/accounts", accountsRouter);
+app.use("/api/transactions", transactionsRouter);
+app.use("/api/tags", tagsRouter);
+app.use("/api/budgets", budgetsRouter);
+app.use("/api/rules", rulesRouter);
+app.use("/api/goals", goalsRouter);
+app.use("/api/dashboards", dashboardsRouter);
+// No /api/ingest — integrations post to /api/transactions
 
-**CSV import best-effort hint (background, advisory only):**
+// Error handler
+app.use(errorHandler);
 
-For CSV imports where provider metadata is absent, a background pass runs after import using the same matching criteria. High-confidence matches (same day, exact amount, known payment description pattern in either Hebrew or English) are surfaced as suggestions in the Transfer Review banner. No automatic action. User handles each suggestion via the normal Edit Transaction → TYPE = TRANSFER flow.
-
-### Async Ingest Queue — Encrypted Blob Pattern
-
-Any ingest source that runs server-side (without a live browser session) uses this pattern. The server never stores readable financial data — only an encrypted opaque blob the server itself cannot query.
-
-**Encryption scheme:** AES-256-GCM with a 12-byte random IV per blob. Key source: `INGEST_ENCRYPTION_KEY` environment secret (256-bit, Vercel environment variable, never in source). This is the MVP key model — the server holds the key but the data is short-lived and immediately deleted on ingest.
-
-**Full lifecycle:**
-
-```
-Server-side job runs (SimpleFIN cron, webhook receipt):
-  1. Fetch/receive raw transaction payload
-  2. Normalise to ingest schema (Zod-validated)
-  3. Generate random 12-byte IV
-  4. Encrypt full JSON payload with AES-256-GCM
-  5. INSERT into ingest_blobs: { user_id, source, iv, ciphertext, expires_at: now+48h }
-  6. Job complete. Server holds only ciphertext. Cannot query amounts or descriptions.
-
-Next browser session open:
-  1. tRPC call: checkPendingBlobs() → returns count only (not contents)
-  2. If count > 0: tRPC call: claimIngestBlob(id)
-     → server decrypts in-memory, returns plaintext payload over HTTPS (TLS in transit)
-     → row marked ingested_at = now
-  3. Browser runs standard ingest pipeline on received payload:
-     dedup → rules engine → AI queue → OPFS write → Drive upload
-  4. tRPC call: confirmBlobIngested(id)
-     → server hard-deletes the row immediately
-  5. Blob lifetime on server in decrypted form: 0ms (never persisted decrypted)
-  6. Blob lifetime on server total: minutes to 48h max
-
-Background cleanup:
-  Upstash cron (hourly): DELETE FROM ingest_blobs WHERE expires_at < now
-  Belt-and-suspenders TTL — rows are normally deleted in step 4 but this catches failures
-```
-
-**No cap on payload size** — a single blob can hold an entire month of SimpleFIN transactions as one encrypted JSON array. The 500-transaction-per-call limit in the REST API does not apply to blobs (they're assembled server-side under our control).
-
----
-
-### Ingest Surface A — Webhook / REST API
-
-A POST endpoint at `/api/ingest` accepts transaction payloads from external systems (Moneyman, custom scripts, anything the user builds).
-
-**Auth:** API key in `Authorization: Bearer <key>` header. Keys are created in Settings → Integrations, displayed once, stored as SHA-256 hash in Postgres. Per-user, named, revocable.
-
-**Payload (Zod-validated):**
-
-```typescript
-const IngestPayload = z.object({
-  account_id: z.string().uuid(),
-  transactions: z.array(z.object({
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    amount: z.number(),                       // signed
-    currency: z.string().length(3),
-    description: z.string(),
-    merchant: z.string().optional(),
-    status: z.enum(['cleared', 'pending']).default('cleared'),
-  })).min(1).max(500),
+// Start
+initDb().then(() => {
+  app.listen(PORT, () => console.log(`Server on ${PORT}`));
 });
 ```
 
-**Two delivery paths depending on whether a browser session is active:**
-
-- **Session active:** payload routes directly to the tRPC ingest handler → browser pipeline → OPFS. Never hits Postgres.
-- **No active session:** payload is encrypted and written to `ingest_blobs`. Picked up on next browser open.
-
-The webhook endpoint itself has no way to know if a session is active — it always writes to `ingest_blobs`. The browser checks for pending blobs on every load and drains the queue before rendering the UI. This is simpler, more reliable, and eliminates any race condition between the webhook and an open session.
-
-**Response:** `{ queued: number, errors: string[] }` — always synchronous acknowledgement to the caller; actual OPFS write is always async.
-
-This is the Moneyman integration target. One config line in Moneyman points at `https://app.goaldy.com/api/ingest` with the user's API key. Done.
-
-### Ingest Surface B — SimpleFIN (US Banks)
-
-The user pastes their SimpleFIN access URL into Settings → Integrations. Goaldy:
-
-1. Stores the encrypted access URL in `sync_connections` in Postgres
-2. Upstash QStash triggers a daily sync job per user who has a SimpleFIN connection
-3. The job calls SimpleFIN's `/accounts` endpoint, normalises to the ingest schema
-4. Encrypts the full payload and writes to `ingest_blobs`
-5. On next browser session: blob is claimed, decrypted in transit, ingested to OPFS, row deleted
-
-SimpleFIN pulls up to 90 days of history. On first connection, the full history blob may be large — this is fine, the blob pattern handles arbitrary payload size. Subsequent daily syncs are small (1-10 transactions typically).
-
-### Ingest Surface C — File Import (Browser-Side)
-
-All file parsing happens **in the browser**. Files are never uploaded to Goaldy's servers.
-
-|Format|Parser|Notes|
-|---|---|---|
-|CSV (generic)|Client-side column auto-detection|Learns mapping from first import|
-|Hapoalim CSV|Named parser|Specific column schema|
-|Leumi CSV|Named parser||
-|Max/Leumi Card CSV|Named parser||
-|Discount CSV|Named parser||
-|Isracard CSV|Named parser||
-|Mizrahi CSV|Named parser||
-|Visa Cal CSV|Named parser||
-|OFX / QIF|Standard parser|Works for US banks, EU banks|
-|Buxfer export|Named parser|Migration path; handles tag mapping|
-|Actual Budget `.db`|SQLite reader|Direct schema mapping|
-|YNAB CSV|Named parser||
-
-### Ingest Surface D — Manual Entry
-
-Transactions entered directly in the UI. No pipeline complexity — writes directly to SQLite.
-
----
-
-## 7. Categorization Engine
-
-### Rules Engine (Runs First, Free, No API Call)
-
-Rules are evaluated in `priority` order (ascending). Each rule has one or more conditions combined by `match_mode` ('all' = AND, 'any' = OR).
+### 4.2 Database Layer
 
 ```typescript
-// Pseudocode — actual impl in packages/engine/rules.ts
-function applyRules(tx: Transaction, rules: Rule[]): TagAssignment | null {
-  for (const rule of rules.sortedByPriority) {
-    const matched = rule.matchMode === 'all'
-      ? rule.conditions.every(c => evaluateCondition(c, tx))
-      : rule.conditions.some(c => evaluateCondition(c, tx));
-    
-    if (matched) {
-      incrementMatchCount(rule.id);  // for staleness tracking
-      return { tagId: rule.targetTagId, source: 'rule' };
-    }
-  }
-  return null;  // → goes to AI queue
+// src/db/queries.ts
+import Database from "better-sqlite3";
+
+const db = new Database("data/goaldy.db");
+
+export const queries = {
+  // Accounts
+  getAccounts: () =>
+    db.prepare("SELECT * FROM accounts ORDER BY sort_order").all(),
+  getAccount: (id: string) =>
+    db.prepare("SELECT * FROM accounts WHERE id = ?").get(id),
+  createAccount: (data: Account) =>
+    db.prepare("INSERT INTO accounts (...) VALUES (...)").run(data),
+  updateAccount: (id: string, data: Partial<Account>) =>
+    db.prepare("UPDATE accounts SET ... WHERE id = ?").run(data, id),
+
+  // Transactions
+  getTransactions: (filters: { accountId?; tagId?; dateFrom?; dateTo? }) => {
+    // Build dynamic query with filters
+    return db
+      .prepare(buildQuery("SELECT * FROM transactions WHERE ...", filters))
+      .all();
+  },
+  createTransaction: (data: Transaction) => {
+    /* ... */
+  },
+  updateTransaction: (id: string, data: Partial<Transaction>) => {
+    /* ... */
+  },
+  deleteTransaction: (id: string) => {
+    /* ... */
+  },
+
+  // Tags
+  getTags: () =>
+    db.prepare("SELECT * FROM tags ORDER BY parent_id, sort_order").all(),
+
+  // ... all CRUD operations
+};
+```
+
+**Use `better-sqlite3` (synchronous):** Simpler than sqlite3 (callback-based), single-threaded is fine for one user, better performance.
+
+### 4.3 API Routes (REST)
+
+```typescript
+// src/api/accounts.ts
+import express from "express";
+import { queries } from "../db/queries";
+import { validateAccount } from "../services/validators";
+
+const router = express.Router();
+
+// GET /api/accounts
+router.get("/", (req, res) => {
+  const accounts = queries.getAccounts();
+  res.json(accounts);
+});
+
+// POST /api/accounts
+router.post("/", (req, res) => {
+  const { data, error } = validateAccount(req.body);
+  if (error) return res.status(400).json({ error });
+  const account = queries.createAccount(data);
+  res.status(201).json(account);
+});
+
+// PATCH /api/accounts/:id  — partial update (only send changed fields)
+router.patch("/:id", (req, res) => {
+  const { data, error } = validateAccount(req.body, { partial: true });
+  if (error) return res.status(400).json({ error });
+  const account = queries.updateAccount(req.params.id, data);
+  if (!account) return res.status(404).json({ error: "Not found" });
+  res.json(account);
+});
+
+// DELETE /api/accounts/:id
+router.delete("/:id", (req, res) => {
+  const existed = queries.deleteAccount(req.params.id);
+  if (!existed) return res.status(404).json({ error: "Not found" });
+  res.status(204).send();
+});
+
+export default router;
+```
+
+**Pattern:** Every resource (accounts, transactions, tags, goals, rules, snapshots) gets the full verb set:
+
+- `GET /api/entity` → list (paginated, filterable)
+- `POST /api/entity` → create (transactions also accept an array)
+- `GET /api/entity/:id` → detail
+- `PATCH /api/entity/:id` → partial update (send only changed fields)
+- `DELETE /api/entity/:id` → delete
+- Plus resource-specific actions (e.g., `POST /api/transactions/:id/transfers/find`, `POST /api/token/rotate`)
+
+**Verb convention:** `PATCH` is the update verb — partial, idempotent, only the fields you send. We do **not** use `PUT` (no full-resource replacement semantics needed for a single-user app; PATCH covers every real edit). `POST` creates, `GET` reads, `DELETE` removes. This convention is enforced identically across every resource so the OpenAPI spec (§4.6) is mechanical to generate and the frontend client is mechanical to consume.
+
+### 4.4 Batch + Idempotent Transaction Create (the universal ingest primitive)
+
+`POST /api/transactions` accepts a single object or an array. It dedups on `import_hash` and runs the rules engine. This one endpoint serves the UI, Moneyman, scripts, and webhooks identically.
+
+```typescript
+// src/api/transactions.ts
+import { createHash } from "crypto";
+
+function importHash(tx: TxInput): string {
+  return createHash("sha256")
+    .update(`${tx.date}|${tx.amount}|${tx.description}|${tx.account_id}`)
+    .digest("hex");
+}
+
+// POST /api/transactions  — single object OR array
+router.post("/", (req, res) => {
+  const input = Array.isArray(req.body) ? req.body : [req.body];
+
+  let created = 0,
+    skipped = 0;
+  const errors: { index: number; message: string }[] = [];
+
+  // Wrap the whole batch in one SQLite transaction for speed + atomicity
+  const runBatch = db.transaction((items: TxInput[]) => {
+    items.forEach((raw, index) => {
+      try {
+        const { data, error } = validateTransaction(raw); // Zod
+        if (error) {
+          errors.push({ index, message: error });
+          return;
+        }
+
+        const hash = importHash(data);
+        if (queries.getTransactionByHash(hash)) {
+          skipped++;
+          return;
+        } // idempotent
+
+        const tag = data.tag_id ? { id: data.tag_id } : rulesEngine.apply(data); // auto-tag
+
+        queries.createTransaction({
+          ...data,
+          tag_id: tag?.id,
+          import_hash: hash,
+        });
+        created++;
+      } catch (e) {
+        errors.push({ index, message: (e as Error).message });
+      }
+    });
+  });
+
+  runBatch(input);
+
+  res.status(created > 0 ? 201 : 200).json({ created, skipped, errors });
+});
+```
+
+**Notes:**
+
+- `account_id` must already be a valid Goaldy account. Callers resolve their own source-account identifiers to Goaldy accounts before posting (see PRD §5.3). The server does not embed scraper-specific mapping.
+- Dedup is idempotent: re-posting an overlapping date range creates zero duplicates.
+- The batch runs inside one `db.transaction()` — 200 rows insert in a few ms and either all validation-passing rows commit or the process errors cleanly.
+- Auth is the standard bearer token or session (see §4.5), not a bespoke API key check.
+
+### 4.5 Auth Middleware (session cookie OR bearer token)
+
+```typescript
+// src/middleware/auth.ts
+export function authMiddleware(req, res, next) {
+  if (req.path === "/health" || req.path === "/api/session") return next();
+
+  // Machine clients: Authorization: Bearer <token>
+  const bearer = req.headers.authorization?.split(" ")[1];
+  if (bearer && bearer === getApiToken()) return next();
+
+  // Browser clients: signed session cookie
+  if (req.cookies?.session && isValidSession(req.cookies.session))
+    return next();
+
+  return res.status(401).json({ error: "Unauthorized" });
 }
 ```
 
-**Self-cleansing signals** — surfaced in UI under Tags → Rules:
+Both paths grant identical full access — single user, single scope. The API token is generated at first run, stored hashed in the `settings` table, surfaced in Settings → Integrations, and rotatable via `POST /api/token/rotate`.
 
-- Rules with `match_count = 0` and `created_at > 30 days ago` → "Never matched — delete?"
-- Rules with `last_matched_at < 90 days ago` → "Stale — still relevant?"
-- Rules with `match_count = 1` ever → "Only matched once — consolidate?"
+### 4.6 OpenAPI Spec + Swagger UI (required deliverable)
 
-### AI Categorization (Claude, Runs Second, Background)
+The backend is the single source of API truth. It ships a complete **OpenAPI 3.1** document describing every resource, every verb, every request/response schema, and the two auth schemes. Swagger UI renders it in-app.
 
-Unmatched transactions are batched and sent to Claude claude-sonnet-4-6 via a few-shot prompt:
+**Endpoints:**
 
 ```
-System: You are a financial transaction categorizer. 
-The user's tag tree is: [serialized tag tree]
-Here are examples of confirmed categorizations: [10 most recent user-confirmed tx]
-Respond with ONLY a JSON array: [{ "id": "...", "tag_id": "...", "confidence": 0.0-1.0 }]
-
-User: Categorize these transactions: [batch of unmatched tx — descriptions only, no amounts]
+GET /api/openapi.json     # The raw OpenAPI 3.1 document (machine-readable)
+GET /api/docs             # Swagger UI (human-readable, "try it out" enabled)
 ```
 
-**Privacy constraint:** Amounts are not sent to Claude. Description and merchant only. Tag assignments do not require amount data.
+**How the spec is produced — schema-first, zero drift:**
 
-The response is applied to SQLite with `category_source = 'ai'` and `ai_confidence` set. Transactions with `ai_confidence < 0.7` are surfaced in the triage queue for user review.
+Zod schemas already validate every request body (§4.3). We reuse them as the single definition and generate OpenAPI from them with `@asteasolutions/zod-to-openapi`. This means the validation logic and the documentation come from the _same_ source — the docs cannot drift from what the server actually accepts, because they're generated from the code path that enforces it.
 
-### Triage Health Metric
+```typescript
+// src/api/openapi.ts
+import {
+  OpenAPIRegistry,
+  OpenApiGeneratorV31,
+} from "@asteasolutions/zod-to-openapi";
+import {
+  AccountSchema,
+  TransactionSchema,
+  TagSchema,
+  GoalSchema,
+  RuleSchema,
+  SnapshotSchema,
+} from "../services/validators";
 
-Displayed prominently in the UI: `"X% auto-categorized · Y transactions need review"`. Goal is to minimize manual review over time as rules accumulate from confirmed AI suggestions. A mature setup should sustain >95% auto-categorization.
+const registry = new OpenAPIRegistry();
+
+// Register the bearer + cookie auth schemes
+registry.registerComponent("securitySchemes", "bearerAuth", {
+  type: "http",
+  scheme: "bearer",
+  description: "Integration token (Settings → Integrations)",
+});
+registry.registerComponent("securitySchemes", "cookieAuth", {
+  type: "apiKey",
+  in: "cookie",
+  name: "session",
+});
+
+// Register each resource schema once; reuse across paths
+const Account = registry.register("Account", AccountSchema);
+const Transaction = registry.register("Transaction", TransactionSchema);
+// ... Tag, Goal, Rule, Snapshot
+
+// Register paths (one helper call per resource generates all 5 verbs)
+registerCrud(registry, {
+  path: "/api/accounts",
+  tag: "Accounts",
+  schema: Account,
+  listFilters: ["archived", "type"],
+});
+registerCrud(registry, {
+  path: "/api/transactions",
+  tag: "Transactions",
+  schema: Transaction,
+  listFilters: [
+    "account_id",
+    "tag_id",
+    "type",
+    "date_from",
+    "date_to",
+    "limit",
+    "offset",
+  ],
+  batchCreate: true, // documents the array-or-object body + {created,skipped,errors} response
+});
+// ... tags, goals, rules
+
+export function buildOpenApiDocument() {
+  const generator = new OpenApiGeneratorV31(registry.definitions);
+  return generator.generateDocument({
+    openapi: "3.1.0",
+    info: {
+      title: "Goaldy API",
+      version: "1.0.0",
+      description:
+        "Self-hosted personal finance. Single user. One SQLite file. Every resource, every verb.",
+    },
+    servers: [{ url: "/" }],
+    security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+  });
+}
+```
+
+```typescript
+// wire into server.ts
+import swaggerUi from "swagger-ui-express";
+import { buildOpenApiDocument } from "./api/openapi";
+
+const openApiDoc = buildOpenApiDocument();
+app.get("/api/openapi.json", (_req, res) => res.json(openApiDoc));
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiDoc));
+```
+
+**Coverage requirement (non-negotiable):** the spec MUST document, for every resource below, all of `GET (list)`, `POST (create)`, `GET /:id`, `PATCH /:id`, `DELETE /:id`, plus resource-specific actions:
+
+| Resource     | Base path           | Resource-specific actions                                                             |
+| ------------ | ------------------- | ------------------------------------------------------------------------------------- |
+| Accounts     | `/api/accounts`     | `GET/POST /:id/snapshots`                                                             |
+| Transactions | `/api/transactions` | `POST` accepts array (batch); `POST /:id/transfers/find`                              |
+| Tags         | `/api/tags`         | `GET /:id/transactions`, `GET /:id/budget-status`                                     |
+| Budgets      | `/api/budgets`      | `GET /summary`, `GET /:tag_id` (read-only; derived from tags)                         |
+| Rules        | `/api/rules`        | `POST /test`                                                                          |
+| Goals        | `/api/goals`        | —                                                                                     |
+| Dashboards   | `/api/dashboards`   | `GET /expense`, `/income`, `/net-worth`, `/merchants` (read-only)                     |
+| Settings     | `/api/settings`     | `GET`, `PATCH` (currency, language, date format)                                      |
+| System       | —                   | `GET /health`, `POST/DELETE /api/session`, `GET /api/token`, `POST /api/token/rotate` |
+
+**Response envelope conventions (documented in the spec):**
+
+- List endpoints: `{ "data": [...], "total": N, "limit": L, "offset": O }`
+- Errors: `{ "error": "message", "details"?: [...] }` with correct HTTP status (400 validation, 401 auth, 404 missing, 409 conflict)
+- Batch create: `{ "created": N, "skipped": M, "errors": [{ "index": i, "message": "..." }] }`
+
+**Client generation (frontend consumes, never hand-writes types):** the frontend's API types are generated from `/api/openapi.json` via `openapi-typescript`, so `frontend/src/types/api.d.ts` is a build artifact, not hand-maintained. Backend schema change → regenerate → TypeScript compile errors surface every consumer that needs updating. This is the mechanism that keeps the "backend exposes it all, frontend consumes it" contract honest.
+
+```
+# frontend build step
+npx openapi-typescript http://localhost:3000/api/openapi.json -o src/types/api.d.ts
+```
 
 ---
 
-## 8. Tag System Design
+## 5. Frontend Architecture
 
-**There are no categories.** Only tags. This is non-negotiable and drives the entire data model.
+### 5.1 React Structure
 
-- Tags form an **arbitrary-depth tree** via adjacency list (`parent_id` self-reference)
-- A transaction can have **multiple tags** (e.g. "Groceries" + "Family" + "Recurring")
-- Exactly **one tag is `is_primary = 1`** per transaction — used for display in lists and default grouping
-- Tags can be marked `is_income = 1` to classify income streams
-- The tag tree drives: simulation rollups, report grouping, cashflow forecasting, intelligence feed card generation
+```typescript
+// src/App.tsx
+import { BrowserRouter, Routes, Route } from 'react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import MainLayout from './components/layout/MainLayout';
+import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
+import Transactions from './pages/Transactions';
+import Accounts from './pages/Accounts';
+// ... other pages
 
-**No budget envelopes. No category groups. No forced methodology.** The tree is whatever the user makes it. The app is not in love with any budgeting system.
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route element={<MainLayout />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/transactions" element={<Transactions />} />
+            <Route path="/accounts" element={<Accounts />} />
+            {/* ... more routes */}
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+}
+```
 
----
+### 5.2 Data Fetching with TanStack Query
 
-## 9. UI Architecture
+```typescript
+// src/hooks/useApi.ts
+import { useQuery, useMutation } from '@tanstack/react-query';
 
-### Layout
+export function useAccounts() {
+  return useQuery({
+    queryKey: ['accounts'],
+    queryFn: () => fetch('/api/accounts').then(r => r.json()),
+  });
+}
 
-Monarch-style left sidebar navigation, wide content area, no persistent right panel. Clean, modern, professional. Not Buxfer's three-column density.
+export function useCreateAccount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data) => fetch('/api/accounts', { method: 'POST', body: JSON.stringify(data) }).then(r => r.json()),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['accounts'] }),
+  });
+}
 
-**Sidebar top section:** Dashboard · Transactions · Reports · Goals · Budgets **Sidebar collapsible "More":** Tags · Rules · Merchants **Sidebar bottom:** Account tree (collapsible groups by liquidity class; Net Worth total pinned at top; clicking an account navigates to filtered transaction view)
+// Usage in component
+function Accounts() {
+  const { data: accounts, isLoading } = useAccounts();
+  const createAccount = useCreateAccount();
 
-### Key Screens
+  if (isLoading) return <p>Loading...</p>;
 
-|Screen|Primary purpose|
-|---|---|
-|Dashboard|Net worth total + liquidity decomposition pills; horizontal tab selector (Expense / Income / Cash Flow / Net Worth dashboards); intelligence feed cards|
-|Transactions|Full ledger with triage banner; inline tag assignment; account context header when filtered; swipe-to-tag on mobile|
-|Reports|Spending by tag (donut + ranked list); income vs expense bar; net worth over time; cashflow timeline|
-|Goals|Target tracking; simulation scenarios; Monte Carlo projection|
-|Budgets|Tag-based budget assignment; period comparison|
-|Import|File upload + parser selection; column mapping UI; dedup preview|
-|Settings → Integrations|API key management; SimpleFIN token; sync connection status|
+  return (
+    <div>
+      {accounts.map(acc => <AccountItem key={acc.id} account={acc} />)}
+    </div>
+  );
+}
+```
 
-### Component Library
+**Benefits:**
 
-shadcn/ui as the primitive base — unstyled, composable, accessible. Tailwind for everything above primitives. No component library lock-in beyond shadcn. The design system is owned in `apps/web/lib/design-tokens.ts`.
+- Automatic caching
+- Refetch on focus
+- Mutations auto-invalidate related queries
+- Loading/error states
+- No manual state management
 
-### Brand
+### 5.3 Components
 
-|Token|Value|
-|---|---|
-|`color-gold`|`#F9A825`|
-|`color-indigo`|`#283593`|
-|`color-bg`|`#F4F7F6`|
-|`color-surface`|`#FFFFFF`|
-|Font|Plus Jakarta Sans (400, 500, 700)|
+**Sidebar (account tree):**
 
----
+```typescript
+// src/components/layout/Sidebar.tsx
+export default function Sidebar() {
+  const { data: accounts } = useAccounts();
 
-## 10. Internationalization (i18n) — First-Class from Day One
+  const grouped = groupByLiquidity(accounts);
 
-**This is non-negotiable infrastructure, not a feature.** Retrofitting RTL and i18n post-launch is one of the most expensive mistakes in web development.
+  return (
+    <aside className="sidebar">
+      <div className="net-worth">${netWorth}</div>
+      {Object.entries(grouped).map(([group, accs]) => (
+        <details key={group} open>
+          <summary>{group}</summary>
+          {accs.map(acc => (
+            <Link to={`/accounts/${acc.id}`} key={acc.id}>
+              {acc.name} <span>{acc.balance}</span>
+            </Link>
+          ))}
+        </details>
+      ))}
+    </aside>
+  );
+}
+```
 
-### Implementation
+**Dashboard:**
 
-**Library:** `next-intl` — App Router native, type-safe, supports RTL direction switching.
+```typescript
+// src/pages/Dashboard.tsx
+export default function Dashboard() {
+  const { data: expenses } = useQuery({
+    queryKey: ['dashboard', 'expense'],
+    queryFn: () => fetch('/api/dashboards/expense').then(r => r.json()),
+  });
 
-**Locale storage:** `users.locale` in Postgres. Loaded at session level. No URL locale prefix (this is an authenticated app, not a public site).
+  return (
+    <div className="dashboard">
+      <PieChart data={expenses} />
+      <BudgetTable />
+      <Trends />
+    </div>
+  );
+}
+```
 
-**Supported locales at MVP:** `en` (LTR), `he` (RTL)
+### 5.4 Styling
 
-**RTL architecture:**
+**Tailwind + custom tokens:**
 
 ```css
-/* All layout uses logical properties — never left/right */
-padding-inline-start: 1rem;  /* not padding-left */
-margin-inline-end: 0.5rem;   /* not margin-right */
+/* src/App.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* Tailwind RTL variants on directional elements */
-<div class="ml-4 rtl:mr-4 rtl:ml-0">
-```
-
-**Currency formatting — always `Intl.NumberFormat`, never string concatenation:**
-
-```typescript
-// ✅ correct
-new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' }).format(1234.56)
-// → ‏1,234.56 ₪  (RTL mark + symbol on right in Hebrew)
-
-// ✅ correct
-new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(1234.56)
-// → $1,234.56
-
-// ❌ never
-`₪${amount}`
-```
-
-**Hebrew bank transaction descriptions** come in Hebrew regardless of UI locale. The parser layer preserves them as-is. The rules engine matches against Hebrew text. Claude categorizes Hebrew descriptions correctly.
-
----
-
-## 11. Israeli-Specific Financial Instruments
-
-These are first-class features, not afterthoughts. No competitor implements them.
-
-### קרן השתלמות (Keren Hishtalmut)
-
-- Account type in the schema: `type = 'investment'`, `liquidity_class = 'locked'`
-- Intelligence card tracks days to vesting (6-year lock), projects value at vesting date
-- Post-vesting: card presents the three standard options (withdraw tax-free, leave to compound, roll to pension) with simple scenario calculations
-- Vesting date is user-input at account creation
-
-### Pension (פנסיה)
-
-- `type = 'investment'`, `liquidity_class = 'locked'`
-- Snapshot-based account (estimated value updated periodically)
-- Intelligence card tracks projected value at retirement age (user-input target age)
-
-### Mortgage (משכנתא)
-
-- `type = 'loan'`, `liquidity_class = 'liability'`
-- User enters current rate and balance
-- Intelligence card compares current rate vs current market rate (fetched from Bank of Israel public API)
-- If spread > configurable threshold, surfaces refinancing insight card (lead gen hook, Phase 4)
-
-### Multi-Currency
-
-The schema supports per-account and per-transaction currency. Net worth aggregation and sidebar section totals convert each account balance to the user's **base currency** for aggregation.
-
-**FX implementation (`packages/trpc/fx.ts`):**
-- API: **Frankfurter** (`https://api.frankfurter.app/latest?from=<base>`) — free, no API key, ECB-backed, ~30 major currencies
-- Cache: in-process `Map<baseCurrency, { rates, fetchedAt }>` with 1-hour TTL; at most one HTTP request per hour per base currency — no DB storage needed
-- `getExchangeRates(base, foreignCurrencies[])` — fetches all rates in a single call; returns `Record<foreignCurrency, rate>` where `rate = "1 base = X foreign"`
-- `convertToBase(amount, fromCurrency, toCurrency, rates)` — `amount / rate`; passes through unconverted with a warning if rate is missing
-- Base currency: stored as `meta` table key `base_currency` (default `ILS`); read by `getBaseCurrency(db)` helper in `accounts.ts`
-
-**Account query outputs** (`accounts.list`, `accounts.get`, `accounts.listArchived`, `accounts.archive`, `accounts.restore`) include:
-- `balance` — native currency amount (for per-account display)
-- `balanceInBase` — converted to base currency (for sidebar totals and net worth)
-- `baseCurrency` — the base currency code used for conversion
-
-**Net worth** in `transactions.summary` similarly converts each account balance before summing.
-
----
-
-## 12. Security Model
-
-### What Goaldy Never Stores
-
-- Bank credentials (never touched)
-- Transaction amounts in transit (SimpleFIN sync stores descriptions only temporarily)
-- Full financial history server-side (lives in user's Drive only)
-
-### Auth
-
-- Google OAuth via NextAuth — access token and refresh token stored encrypted in `drive_connections`
-- Magic link email fallback for non-Google auth
-- Sessions: JWT, 30-day expiry, refresh on activity
-- All Postgres sensitive fields (tokens, access URLs) encrypted at rest via Supabase column encryption
-
-### Ingest API Security
-
-- API keys: 32-byte random, shown once, stored as SHA-256
-- Rate limited per key: 10 requests/minute, 1,000 transactions/day
-- Keys are per-user, named, revocable individually from Settings
-
-### Drive Security
-
-- `appDataFolder` scope only — narrow, non-threatening to users
-- `goaldy.db` is readable only by the Goaldy app via OAuth
-- Users can delete the file from Drive at any time — complete data deletion with no Goaldy involvement
-- Drive-level encryption at rest provided by Google
-
----
-
-## 16. Buxfer Migration — Historical Context (Day One Priority)
-
-The builder is User #1. Goaldy is not production-ready until it replaces Buxfer for daily use.
-
-### Migration Script
-
-A one-time CLI tool (not in the UI — runs locally):
-
-```
-1. Input: Buxfer full export (CSV) + scraped rules JSON
-2. Map Buxfer accounts → Goaldy accounts (with liquidity_class assignment prompt)
-3. Map Buxfer tags → Goaldy tag tree (hierarchical structure preserved)
-4. Map Buxfer transactions → Goaldy transactions (with import_hash generation)
-5. Convert Buxfer rules (string patterns) → Goaldy rule_conditions (structured)
-6. Output: populated goaldy.db ready to upload to Drive
-```
-
-This is Phase 0 work. Nothing else ships until this works.
-
----
-
-## 17. Monetization Architecture Hooks (Phase 4 Ready, Unused Now)
-
-The subscription and analytics tables exist in Postgres from day one. Feature flags are evaluated at the tRPC layer:
-
-```typescript
-// packages/trpc/middleware/subscription.ts
-export const requirePro = t.middleware(async ({ ctx, next }) => {
-  if (ctx.user.subscription.tier !== 'pro') {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pro feature' });
+@layer components {
+  .card {
+    @apply bg-white border border-gray-200 rounded-lg p-4;
   }
-  return next();
-});
+
+  .button-primary {
+    @apply px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700;
+  }
+}
+
+/* RTL support */
+[dir="rtl"] .sidebar {
+  @apply right-0;
+}
 ```
 
-Free tier limits enforced at tRPC layer — not at the UI layer. The UI can show the feature but the procedure throws if the user is not Pro.
+---
 
-Analytics events fire on key actions with no financial data:
+## 6. Docker Deployment
 
-```typescript
-// Example: import completed
-trackEvent(userId, 'import_completed', { 
-  source: 'moneyman', 
-  count: 47,
-  auto_tagged_pct: 89 
-  // never: amounts, descriptions, account names
-});
+### 6.1 Dockerfile (Multi-stage)
+
+```dockerfile
+# Stage 1: Build backend
+FROM node:20-alpine AS backend-build
+WORKDIR /app/backend
+COPY backend/package*.json ./
+RUN npm ci
+COPY backend .
+RUN npm run build
+
+# Stage 2: Build frontend
+FROM node:20-alpine AS frontend-build
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend .
+RUN npm run build
+
+# Stage 3: Runtime
+FROM node:20-alpine
+WORKDIR /app
+RUN mkdir -p /data
+
+# Copy backend
+COPY --from=backend-build /app/backend/dist ./backend
+COPY --from=backend-build /app/backend/package*.json ./
+
+# Copy frontend to backend's public directory
+COPY --from=frontend-build /app/frontend/dist ./backend/public
+
+# Install production dependencies only
+RUN npm ci --production
+
+EXPOSE 3000
+ENV NODE_ENV=production \
+    DATABASE_URL=/data/goaldy.db \
+    PORT=3000
+
+VOLUME /data
+
+CMD ["node", "backend/index.js"]
 ```
 
-Stripe integration wired at Phase 4. The schema is ready. The code is not written until there is something worth paying for.
+### 6.2 docker-compose.yml
 
----
+```yaml
+version: "3.9"
+services:
+  goaldy:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      # Optional: seed the API bearer token. If unset, one is generated at first
+      # run and shown in Settings → Integrations. Used by ALL integrations
+      # (Moneyman, scripts, webhooks) against POST /api/transactions.
+      API_TOKEN: ${API_TOKEN:-}
+    volumes:
+      - goaldy-data:/data
+    restart: unless-stopped
 
-## 18. Development Phases
+volumes:
+  goaldy-data:
+    driver: local
+```
 
-### Phase 0 — Foundation (Before Anything Else)
+**Run:**
 
-- [ ] T3 monorepo scaffold with all tooling
-- [ ] Google OAuth + NextAuth
-- [ ] Supabase Postgres with full schema migrated
-- [ ] wa-sqlite + OPFS layer working in browser
-- [ ] Google Drive `appDataFolder` read/write working
-- [ ] `goaldy.db` schema initialized on first launch
-- [ ] Buxfer migration CLI — import full history and rules
-- [ ] Builder stops using Buxfer
-
-### Phase 1 — Core Ledger
-
-- [ ] Account CRUD with liquidity class
-- [ ] Transaction list view
-- [ ] CSV file import with Israeli bank parsers
-- [ ] Manual tag assignment in UI
-- [ ] Tag tree management
-- [ ] Net worth calculation from accounts + snapshots
-- [ ] Basic dashboard (balances, recent transactions)
-
-### Phase 2 — Intelligence Layer
-
-- [ ] Rules engine with structured conditions
-- [ ] Moneyman webhook ingest endpoint + API key management
-- [ ] SimpleFIN integration (US banks)
-- [ ] Claude AI categorization pipeline
-- [ ] Triage health metric in UI
-- [ ] Intelligence feed cards (anomaly, cashflow)
-- [ ] Self-cleansing rules signals in UI
-
-### Phase 3 — Israeli Features + Reports
-
-- [ ] קרן השתלמות countdown card
-- [ ] Mortgage rate comparison card (Bank of Israel API)
-- [ ] Pension projection card
-- [ ] Full reports screen (spending, NW trend, cashflow)
-- [ ] Goal tracking and simulation
-- [ ] DuckDB-WASM for heavy analytical queries
-- [ ] Hebrew UI (RTL, `next-intl` wired)
-
-### Phase 4 — Monetization (Only If Warranted)
-
-- [ ] Legal review of lead gen card framing
-- [ ] Stripe integration
-- [ ] Pro tier feature flags active
-- [ ] Lead gen cards in intelligence feed
-- [ ] Partner referral links
-
----
-
-## 13. Account View
-
-### Page Route
-
-`/accounts/[id]` — server component page that awaits `params`, wraps a `'use client'` `AccountView` component loaded with `dynamic(..., { ssr: false })`.
-
-### AccountView Component (`apps/web/app/(app)/accounts/[id]/AccountView.tsx`)
-
-**Balance card** — always visible at top:
-- Account name, type badge, institution
-- Balance in native currency (`account.balance` + `account.currency`)
-- Balance source label
-- Edit button → inline edit form (name, type, currency, institution, `balance_source`, `reported_value`)
-- Archive button (hidden when `account.isClosed === true`)
-
-**Restore banner** — amber `bg-amber-50 border-amber-200` banner shown when `account.isClosed === true`. Contains "Restore Account" button → `accounts.restore` mutation → page refetch (no redirect).
-
-**Archive confirmation modal** — indigo header, warning body, red "Archive" button + "Do Not Archive" text link. On confirm → `accounts.archive` mutation → redirect to `/dashboard`.
-
-### Time Horizon Selector
-
-Single dropdown button with `←` / `→` arrow buttons on each side. Selected period is reflected in the URL via `useSearchParams` + `router.replace` (no full navigation, no scroll reset).
-
-**URL params:** `?range=THIS_MONTH` (named preset) or `?range=CUSTOM&dateFrom=2026-03-01&dateTo=2026-03-31`
-
-**Range keys:**
-
-| Group | Keys |
-|---|---|
-| Calendar | `THIS_WEEK`, `THIS_MONTH`, `THIS_YEAR`, `LAST_WEEK`, `LAST_MONTH`, `LAST_YEAR` |
-| Rolling | `7D`, `30D`, `60D`, `90D`, `180D`, `3M`, `6M`, `12M` |
-| Special | `ALL`, `CUSTOM` |
-
-**`namedRangeToDates(range)`** — computes `{ dateFrom, dateTo }` for named presets relative to today. URL-explicit `dateFrom`/`dateTo` always take priority over computed values.
-
-**`stepRange(range, dateFrom, dateTo, dir: 1 | -1)`** — two branches:
-- Calendar ranges: shift the whole period by one calendar unit; update the range key (e.g. `THIS_MONTH` → `LAST_MONTH` → becomes prior month's `LAST_MONTH` equivalent)
-- Rolling/CUSTOM: shift by the day-count duration; returns `range: 'CUSTOM'`
-- `ALL`: arrows disabled (`canStep = range !== 'ALL'`)
-
-**Button label** via `rangeLabel()`: shows human-readable period name ("April 2026", "Last 30 Days", "Mar 30 – Apr 5").
-
-### Running Balance
-
-Shown as a column in the transaction list when `account.balance_source === 'transactions'` and the list is scoped to a single account.
-
-**Computation** (in `transactions.list` tRPC handler):
-1. Fetch all-time account total (no date filter): `SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ?`
-2. Walk the page rows newest → oldest: `balanceAfter = runningSum; runningSum -= row.amount`
-3. `balanceAfter` is the running balance displayed on each row
-
-This approach is date-filter-agnostic — the most recent transaction's balance always matches the account header card balance.
-
----
-
-## 14. Buxfer Migration Script (`scripts/migrate-buxfer.ts`)
-
-One-time local migration from Buxfer CSV/TSV exports to `goaldy.db`.
-
-**Input files (from Buxfer full export):**
-- `accounts.csv` — NAME, BALANCE, TYPE, CURRENCY, BANK
-- `tags.csv` — TAG NAME, PARENT TAG NAME
-- `transactions.csv` — UTF-16LE TSV: ID, Date, Description, Currency, Amount, Type, Tags, Account, Status, Memo, IOU
-
-**Steps:**
-1. **Accounts** — maps Buxfer type strings to Goaldy `AccountType`; creates accounts from `accounts.csv` as active (`is_closed = 0`)
-2. **Tags** — topological BFS insert (parents before children); filters utility tags (`added-by-moneyman-etl`, `buxfer-ts-client-ut-mock`)
-3. **Transactions** — deduplication via `SHA-256(date|amount|description|account_id)` stored as `import_hash`; transfer pairs detected from same Buxfer ID with opposite-sign amounts; extra tags stored as `labels` JSON with `tag:` prefix
-4. **Opening balances** — for each active account: `openingAmount = BALANCE_from_csv - SUM(non-opening txs)`; dated one day before earliest transaction; inserts or updates a single "Opening balance" transaction per account
-
-**Synthetic archived accounts** — accounts referenced in `transactions.csv` but absent from `accounts.csv` are created with `is_closed = 1` (archived). These represent closed/disabled accounts that Buxfer no longer exports.
-
-**Dedup report** — after the transaction loop, prints a per-account table of skipped transactions (date, amount, description) for any account with duplicates.
-
-**Overwrite behaviour** — if the output file already exists, it is deleted (along with `-wal`/`-shm` sidecars) before the schema is applied, ensuring idempotent re-runs.
-
-**Usage:**
 ```bash
-npx tsx scripts/migrate-buxfer.ts \
-  --input-dir /path/to/buxfer-export \
-  --output ./goaldy.db
+docker-compose up -d
+# Goaldy available at http://localhost:3000
+# Data persists to /data/goaldy.db (survives restart)
 ```
 
 ---
 
-## 15. Plan Feature Architecture
+## 7. Development Workflow
 
-### 15.0 Architectural Corrections
+### Setup
 
-> **Note:** An earlier internal Plan TDD draft (v3.0) contained three architectural errors that are corrected here and throughout the implementation:
->
-> 1. **RLS is not available in SQLite.** The draft mentioned "row-level security policies" on plan tables. SQLite has no row-level security concept — the file itself is the user boundary. All RLS references have been removed. There is nothing to replace them with: isolation is guaranteed by the file.
-> 2. **`user_id` does not exist in SQLite.** The draft included a `user_id` column in `plan_account_layers`. SQLite has no authenticated user context. The anchor for all plan data is `plan_id = 'default'` (a FK to the singleton `plan_settings` row). The `plan_settings` row with `id = 'default'` is the plan-level anchor — its uniqueness is guaranteed by PRIMARY KEY.
-> 3. **Data access uses tRPC, not REST.** The draft specified `/api/plan/*` REST endpoints. All financial data access in Goaldy uses tRPC procedures. The 17 plan procedures are documented in Section 15.3.
+```bash
+git clone <repo>
+cd goaldy
+
+# Backend
+cd backend
+npm install
+npm run dev  # Port 3000
+
+# Frontend (new terminal)
+cd frontend
+npm install
+npm run dev  # Port 5173 (Vite)
+
+# Frontend will proxy /api/* to http://localhost:3000
+```
+
+### Build & Deploy
+
+```bash
+# Docker build (automatic on push if using CI)
+docker build -t goaldy:latest .
+
+# Run locally
+docker-compose up -d
+
+# Access at http://localhost:3000
+```
+
+### Testing
+
+```bash
+# Backend: Unit tests for queries, rules engine, validators
+npm run test
+
+# Frontend: Component tests, integration tests
+npm run test
+
+# E2E (Playwright): Login, import, create transaction, etc.
+npm run test:e2e
+```
 
 ---
 
-### 15.1 SQLite Schema — Plan Tables
+## 8. Security & Performance
 
-Five new tables were added to `financial.sql` in schema version 2. All are created in `migrateTo2()` in `apps/web/lib/db/migrations.ts`.
+### Security
 
-```sql
--- Singleton plan settings row (id = 'default')
-CREATE TABLE plan_settings (
-  id                       TEXT PRIMARY KEY DEFAULT 'default',
-  monthly_savings          REAL NOT NULL DEFAULT 0,
-  inflation_rate           REAL NOT NULL DEFAULT 0.03,
-  return_rate_override     REAL,
-  horizon_years            INTEGER NOT NULL DEFAULT 37,
-  start_year               INTEGER NOT NULL,
-  emergency_pillar_active  INTEGER NOT NULL DEFAULT 0,  -- BOOL: 0/1
-  emergency_target_months  INTEGER NOT NULL DEFAULT 6,
-  retirement_age           INTEGER,
-  created_at               TEXT NOT NULL,
-  updated_at               TEXT NOT NULL
-);
+**Session auth (browser):**
 
--- Family members (used for AGE-triggered plan items)
-CREATE TABLE plan_members (
-  id         TEXT PRIMARY KEY,
-  plan_id    TEXT NOT NULL REFERENCES plan_settings(id) DEFAULT 'default',
-  name       TEXT NOT NULL,
-  role       TEXT NOT NULL CHECK (role IN ('self','partner','child','parent','other')),
-  birth_year INTEGER NOT NULL,
-  created_at TEXT NOT NULL
-);
+- User logs in with password (bcrypt-hashed, stored in `settings`)
+- Server creates a session row; token delivered as a **httpOnly, SameSite=Lax, Secure** cookie
+- Session expires after 30 days (configurable); expiry returns 401 → frontend redirects to login
+- CSRF: because auth is a SameSite cookie, cross-site form posts are blocked; state-changing routes also require the `application/json` content type (a second cheap guard)
 
--- Unified GOAL + EVENT items
-CREATE TABLE plan_items (
-  id                  TEXT PRIMARY KEY,
-  plan_id             TEXT NOT NULL REFERENCES plan_settings(id) DEFAULT 'default',
-  tier                TEXT NOT NULL CHECK (tier IN ('GOAL','EVENT')),
-  name                TEXT NOT NULL,
-  icon                TEXT,
-  is_system           INTEGER NOT NULL DEFAULT 0,  -- BOOL: system-generated items
-  template_id         TEXT REFERENCES plan_item_templates(id),
-  trigger_type        TEXT NOT NULL CHECK (trigger_type IN ('YEAR','AGE','RECURRING')),
-  trigger_year        INTEGER,   -- used with YEAR
-  trigger_age         INTEGER,   -- used with AGE
-  member_id           TEXT REFERENCES plan_members(id),  -- whose age drives AGE trigger
-  recurrence_years    INTEGER,   -- interval for RECURRING
-  recurrence_end_year INTEGER,   -- last year RECURRING fires
-  amount              REAL NOT NULL,
-  duration_years      INTEGER NOT NULL DEFAULT 1,  -- spread cost over N years
-  saved_amount        REAL NOT NULL DEFAULT 0,     -- already set aside (GOALs)
-  status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','cancelled')),
-  is_active           INTEGER NOT NULL DEFAULT 1,  -- soft delete / pause
-  tag_id              TEXT REFERENCES tags(id),    -- auto-generated on create
-  sort_order          INTEGER NOT NULL DEFAULT 0,
-  created_at          TEXT NOT NULL,
-  updated_at          TEXT NOT NULL
-);
+**API bearer token (machine clients):**
 
--- Read-only seed templates (seeded via plan.seedTemplates mutation)
-CREATE TABLE plan_item_templates (
-  id           TEXT PRIMARY KEY,
-  name         TEXT NOT NULL,
-  name_he      TEXT,   -- Hebrew name
-  icon         TEXT,
-  tier         TEXT NOT NULL CHECK (tier IN ('GOAL','EVENT')),
-  trigger_type TEXT NOT NULL CHECK (trigger_type IN ('YEAR','AGE','RECURRING')),
-  applies_to   TEXT NOT NULL DEFAULT 'self',  -- 'self' | 'child' | 'partner'
-  amount_hint  REAL,
-  sort_order   INTEGER NOT NULL DEFAULT 0
-);
+- Single token, generated at first run or seeded via `API_TOKEN` env var
+- Stored **hashed** in `settings` (`api_token_hash`); compared on each request
+- Sent as `Authorization: Bearer <token>`; used by Moneyman adapters, scripts, webhooks
+- Rotatable via `POST /api/token/rotate` (invalidates the old token)
+- No JWT, no refresh flow — one long-lived token for a single-user self-hosted box
 
--- Account → pillar assignment (investment / emergency / retirement)
-CREATE TABLE plan_account_layers (
-  id                   TEXT PRIMARY KEY,
-  plan_id              TEXT NOT NULL REFERENCES plan_settings(id) DEFAULT 'default',
-  account_id           TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  layer                TEXT NOT NULL CHECK (layer IN ('investment','emergency','retirement')),
-  target_return_rate   REAL,           -- annual decimal (e.g. 0.05 = 5%)
-  monthly_contribution REAL,           -- regular monthly deposit
-  linked_at            TEXT NOT NULL,
-  UNIQUE(account_id)   -- one account can only be in one layer
-);
-```
+**Both auth paths grant identical access** (single user, single scope). Every `/api/*` route except `/health` and `/api/session` accepts either a valid session cookie or a valid bearer token.
 
-**Indexes:**
+**Database:**
 
-```sql
-CREATE INDEX idx_plan_items_plan       ON plan_items(plan_id);
-CREATE INDEX idx_plan_items_tier       ON plan_items(tier);
-CREATE INDEX idx_plan_members_plan     ON plan_members(plan_id);
-CREATE INDEX idx_plan_acct_layers_plan ON plan_account_layers(plan_id);
-CREATE INDEX idx_plan_acct_layers_acct ON plan_account_layers(account_id);
-```
+- SQLite (single process, no network exposure)
+- Stored in `/data` volume (user's server only)
+- No sensitive data outside database
 
-**`plan_settings` singleton pattern:** `id = 'default'` is the PRIMARY KEY — there can only ever be one row. `ensureSettings(db)` in the tRPC router auto-inserts it if missing (on `getSettings`, `updateSettings`, and related queries). No explicit unique constraint needed beyond PRIMARY KEY.
+### Performance
 
-**Default `inflation_rate = 0.03` (3%):** Israeli CPI has averaged above 2.5% historically and was significantly higher in recent years. 3% is the more conservative and realistic default for Israeli users.
+**Queries:**
 
-**`horizon_years = 37`:** The projection covers CY through CY+36 inclusive, producing 37 data points (37 year-end balances). This gives a 36-interval chart. The UI label reads "35-year projection" as a rounded marketing claim; the actual computation is 37 years.
+- All indexed on common filters (account_id, tag_id, date)
+- Pagination on list endpoints (limit 50)
+- SQLite handles 10k+ transactions fine
+
+**Caching (frontend):**
+
+- TanStack Query caches API responses
+- Refetch on window focus
+- Manual invalidation on mutations
+
+**Static files:**
+
+- React build (CSS, JS, HTML) served from Express
+- Gzip compression via middleware
+- Browser caching via Cache-Control headers
 
 ---
 
-### 15.2 Migration Runner
+## 9. Limitations & Future Considerations
 
-**File:** `apps/web/lib/db/migrations.ts`
+| Limitation     | Why                                        | Phase?              |
+| -------------- | ------------------------------------------ | ------------------- |
+| Single user    | Scope gate — no user table, no permissions | Always              |
+| No offline     | Requires server connection                 | Phase 2 (if needed) |
+| No sync        | Data lives on one server                   | Phase 2 (if needed) |
+| SQLite only    | Not designed for concurrent writes         | OK for 1 user       |
+| Single process | No clustering                              | OK for 1 user       |
 
-```typescript
-export function runMigrations(db: LedgerDB): void
-```
+**If demand emerges for multi-user:**
 
-Called immediately after `db.pragma('journal_mode = WAL')` in `openLedger()`. Reads `schema_version` from the `meta` table. If version < 2, runs `migrateTo2(db)`.
+- Add `users` table
+- Add `user_id` foreign key to all data tables
+- Implement row-level security
+- Switch to Postgres
+- Add real auth (OAuth, SAML)
+- Deploy with process manager (PM2)
 
-`migrateTo2()` uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` for all 5 plan tables and 5 indexes, then updates `meta` SET `value = '2'` WHERE `key = 'schema_version'`. Idempotent — safe to run on any existing ledger.
-
----
-
-### 15.3 tRPC Procedures — `planRouter`
-
-**File:** `packages/trpc/routers/plan.ts`  
-**Router key:** `plan` (replaces the deprecated `goals` router)
-
-All procedures are `protectedProcedure` — they require an authenticated session.
-
-| Procedure | Type | Description |
-|---|---|---|
-| `plan.getSettings` | query | Fetch `plan_settings`; auto-inserts `id='default'` if missing |
-| `plan.updateSettings` | mutation | Partial update to any `plan_settings` field |
-| `plan.listMembers` | query | All `plan_members` ordered by `birth_year` |
-| `plan.upsertMember` | mutation | Create or update a plan member (id in input → update, omit → create) |
-| `plan.deleteMember` | mutation | DELETE from `plan_members` by id |
-| `plan.listItems` | query | All `plan_items`; optional `tier` filter; `includeInactive: false` by default |
-| `plan.createItem` | mutation | Insert `plan_item`; auto-creates `Goals/{name}` or `Events/{name}` tag |
-| `plan.updateItem` | mutation | Partial update to `plan_item` fields |
-| `plan.toggleItem` | mutation | Flip `is_active`; blocked for `is_system = 1` items (throws FORBIDDEN) |
-| `plan.deleteItem` | mutation | Soft delete: set `is_active = 0` |
-| `plan.listTemplates` | query | Return all `plan_item_templates` |
-| `plan.seedTemplates` | mutation | Insert `PLAN_ITEM_TEMPLATES` if table is empty; idempotent no-op otherwise |
-| `plan.listAccountLayers` | query | `plan_account_layers` JOIN `accounts` for `account_balance` and `account_name` |
-| `plan.upsertAccountLayer` | mutation | Set layer + rates for `account_id`; uses `ON CONFLICT(account_id) DO UPDATE` |
-| `plan.removeAccountLayer` | mutation | DELETE from `plan_account_layers` by `account_id` |
-| `plan.runProjection` | query | Read settings + active items + members from DB; call `runProjection()` from plan-engine; return `ProjectionResult` |
-| `plan.getEmergencySummary` | query | Join emergency-layer accounts; compute `coverageMonths`, `gap`, `targetAmount`; trailing 12-month expense average from `transactions` |
-
-**Helper functions in `plan.ts`:**
-
-- `ensureSettings(db)` — auto-inserts the singleton row if missing
-- `rowToItem(r)` — converts SQLite integer booleans (`is_system`, `is_active`) to TypeScript booleans
+**For now:** None of this is needed.
 
 ---
 
-### 15.4 Plan Engine (`packages/schema/plan-engine.ts`)
+## 10. Deployment Targets
 
-**Zero DB imports.** Pure TypeScript computation. Used by both the tRPC `plan.runProjection` query (server-side) and the `usePlanProjection` client hook (browser).
+**Tested on:**
 
-#### `buildExpenseMap`
+- Docker Desktop (local)
+- Synology NAS (Docker support)
+- Home server (Ubuntu + Docker)
+- VPS (Linode, Hetzner, DigitalOcean)
 
-```typescript
-buildExpenseMap(
-  items:         PlanItem[],
-  members:       PlanMember[],
-  startYear:     number,
-  horizonYears:  number,
-  inflationRate: number,
-): Record<number, ResolvedExpense[]>
-```
+**Not tested:**
 
-Returns a map from year → list of resolved expenses for that year. Resolves trigger types:
-- `YEAR`: fires in `trigger_year`
-- `AGE`: fires when `current_year - member.birth_year === trigger_age`
-- `RECURRING`: fires every `recurrence_years` from the first matching year through `recurrence_end_year` (or horizon)
-
-Expense amounts:
-- **GOALs:** `max(0, amount - saved_amount)` — no inflation; savings already earmarked
-- **EVENTs:** `amount × (1 + inflationRate)^yearsOut` — inflation-adjusted from today
-
-#### `runProjection`
-
-```typescript
-runProjection(params: ProjectionParams): ProjectionResult
-```
-
-37-year simulation loop:
-
-```
-balance = startingCapital
-for year Y in [startYear .. startYear + horizonYears - 1]:
-  opening = balance
-  investReturn = opening × weightedReturn
-  savings = monthlySavings × 12
-  draws = sum of expenses for year Y
-  closing = opening + investReturn + savings - draws
-  isDanger = closing < 0
-  isStress = closing >= 0 && closing < monthlySavings × 18
-  balance = closing
-```
-
-Returns `ProjectionResult`:
-- `years: YearProjection[]` — per-year data for chart and detail table
-- `isSolvent: boolean` — true if no year has `closing < 0`
-- `firstDangerYear: number | null`
-- `lowestBalance: number`
-- `lowestBalanceYear: number`
-- `finalBalance: number`
-- `requiredMonthlySavings: number`
-- `savingsGap: number`
-
-#### `findRequiredMonthlySavings`
-
-Binary search: lo=0, hi=500,000, 40 iterations. Returns `Math.ceil(hi / 100) * 100` (rounds up to nearest ₪100 for display).
-
-#### `computeWeightedReturn`
-
-Balance-weighted average of per-account return rates. Falls back to `0.05` (5%) when total balance = 0.
+- Kubernetes (overkill)
+- ARM (Raspberry Pi) — probably works but untested
+- Windows (use WSL2)
 
 ---
 
-### 15.5 Item Templates (`packages/schema/plan-item-templates.ts`)
-
-Static constant `PLAN_ITEM_TEMPLATES: PlanItemTemplate[]` — 10 Israeli life event templates. Inserted by `plan.seedTemplates` mutation if the `plan_item_templates` table is empty. Seeding is idempotent (checks row count before insert).
-
-Templates use `trigger_type: 'AGE'` with `applies_to: 'child'` for child-centric events (Bar/Bat Mitzvah, university, etc.), `trigger_type: 'RECURRING'` for periodic costs (car, vacation, renovation), and `trigger_type: 'YEAR'` for user-dated goals (wedding, apartment).
-
----
-
-### 15.6 What-If Client Hook (`apps/web/lib/hooks/usePlanProjection.ts`)
-
-```typescript
-export function usePlanProjection(
-  items:    PlanItem[],
-  members:  PlanMember[],
-  overrides: {
-    monthlySavings:  number
-    startingCapital: number
-    weightedReturn:  number
-    inflationRate:   number
-    startYear:       number
-    horizonYears:    number
-  }
-): ProjectionResult
-```
-
-Calls `runProjection()` inside `useMemo`. Recomputes synchronously (< 5ms for 37 years) on any slider or input change. **No network round-trip** — the what-if experience is instant.
-
-The hook is used by `GoalsEventsTab`. All slider state lives in `GoalsEventsTab` (not in the tRPC cache) so changes are local-only until the user explicitly saves settings.
-
----
-
-### 15.7 System Goal — In-Memory Injection
-
-The Emergency Fund Top-Up goal is **never stored in the database**. It is computed at render time in `PlanClient.tsx` from `emergencySummary` data and injected into the items array client-side:
-
-```typescript
-const systemGoal = useMemo<PlanItem | null>(() => {
-  if (!settings?.emergency_pillar_active || !emergencySummary) return null
-  const { gap } = emergencySummary
-  if (gap <= 0) return null
-  return {
-    id: 'sys-emergency-topup',
-    is_system: true,
-    tier: 'GOAL',
-    // ... other fields
-    amount: gap,
-    saved_amount: emergencySummary.currentBalance,
-  }
-}, [settings?.emergency_pillar_active, emergencySummary])
-```
-
-This is merged into `allItems` in `GoalsEventsTab` before being passed to `usePlanProjection`. The projection engine treats it as any other GOAL.
-
----
-
-### 15.8 Navigation Shell Changes
-
-**Sidebar (`apps/web/components/layout/sidebar.tsx`):**
-
-- 4 primary nav items: Dashboard, Transactions, Budgets, Plan
-- "More" flyout for Reports, Tags, Rules (items unlikely to be used daily)
-- Flyout uses `position: fixed` with `getBoundingClientRect()` to escape the sidebar's `overflow: hidden` clipping context
-- No user footer — avatar, name, logout moved to topbar
-
-**Topbar (`apps/web/components/layout/topbar.tsx`):**
-
-- `UserDropdown` component replaces the old name + logout button
-- Dropdown items: Settings, Preferences, Billing, Log out
-- Closes on outside click via `useRef` + `useEffect`
-
----
-
-### 15.9 Plan Component Tree
-
-```
-apps/web/components/plan/
-  PlanNotif.tsx            # Notification banner (celebrate/success/warning/danger/info/system)
-  TabTemplate.tsx          # Layout: notifications + KPI cards + LinkedAccounts + children
-  LinkedAccounts.tsx       # Collapsible account list with optional return rate inputs
-  GoalsTable.tsx           # Collapsible GOAL-tier items table
-  EventsTable.tsx          # Collapsible EVENT-tier items table
-  HorizonTooltip.tsx       # Custom recharts tooltip (year, ages, cashflow breakdown)
-  ProjectionChart.tsx      # 37-year area chart (recharts, type="linear", dual fill areas)
-  ProjectionControls.tsx   # Savings slider, capital override, inflation buttons, return rates
-  ProjectionDetail.tsx     # Collapsible year-by-year detail table with event/all filter
-  GoalsEventsTab.tsx       # Assembles all above components
-  EmergencyTab.tsx         # Pillar toggle, coverage bar, target selector
-  RetirementTab.tsx        # Accumulation chart + account detail table
-```
-
-Chart library: **Recharts** (added to `@goaldy/web` package).
-
----
-
-## 19. What We Are Not Building
-
-Explicit non-goals. These will never be added without a deliberate design decision documented here:
-
-- **Bank credential management** — Goaldy never holds or proxies bank credentials
-- **Plaid / Finanda / any broker integration** — user brings their own data pipeline
-- **Multi-user / household shared ledger** — single user only; concurrent sessions explicitly unsupported
-- **Envelope budgeting** — the app has no opinion on budgeting methodology
-- **Transaction execution** — read-only financial intelligence; no payments, no transfers
-- **Mobile app** — web only until Phase 4; responsive design is not a mobile app
-- **Public API** — the ingest API is inbound only; no outbound data API for third parties
-- **Social features** — no sharing, no comparison, no community features
-
----
-
-_Document created: 2026-04-03. Status: Living document — update before each phase begins._
+_Created: 2026-06-07. Classic backend/frontend. No magic. No scale. Just a financial ledger._
