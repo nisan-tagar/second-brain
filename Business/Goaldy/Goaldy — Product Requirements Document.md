@@ -1,2005 +1,597 @@
-| Field            | Value                  |
-| ---------------- | ---------------------- |
-| **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-04-19 v1.15       |
-| **Version**      | 1.15                   |
-| **Status**       | Draft                  |
-| **Author**       | Product design session |
+# Goaldy PRD — Self-Hosted Personal Finance App
 
-### Change Log
+| Field            | Value                |
+| ---------------- | -------------------- |
+| **Created**      | 2026-06-07           |
+| **Last Updated** | 2026-06-07 16:00 UTC |
+| **Version**      | 3.0 (clean baseline) |
+| **Status**       | Active               |
 
-|Version|Date|Change|
-|---|---|---|
-|1.0|2026-04-05|Initial PRD — full feature set across 12 feature areas|
-|1.1|2026-04-05|F4.1: removed `is_income` flag (redundant — inferred from cash flow); tag is source of truth for budget configuration with full period support; first-tag-is-primary rule made explicit. F4.2: primary tag rule clarified. F4.4: OOTB stack is i18n per locale. F4.6 added: tag tree transformation (refactor tools + migration). F7.3: budget repeat periods expanded to match Buxfer full support.|
-|1.2|2026-04-05|F3.1/F3.3/F3.4: tagging model simplified to single-tag-or-100%-split; `transaction_tags` join table eliminated; Goal Allocation Assistant added to intelligence feed. F4.2: rewritten as single-or-split constraint documentation. F8.6: goal lifecycle updated with Fund and Review steps. F8.7 added: shortfall resolution flow — three options (extend deadline, increase contributions, one-time miss), deferral handling, automatic default after two deferrals, goal funding history.|
-|1.3|2026-04-05|F3.5: label filter added. F3.6 added: Labels — dimensional markers separate from tags, multiple per transaction, no financial impact, filterable, common vocabulary suggested. Label action added to F3.3 transaction actions.|
-|1.4|2026-04-05|F2.3: transfer detection pass added to import pipeline. F2.6 added: transfer detection — confidence scoring, known payment pattern heuristics, Transfer Review queue, confirm-and-delete flow, external transfer handling. F3.2: split into triage banner + transfer review banner as distinct UI elements.|
-|1.5|2026-04-05|F2.6 rewritten: transfer model corrected to user-initiated (not auto-detected on import); TYPE=TRANSFER with source/destination accounts triggers peer detection on save; CSV fallback is advisory only. F3.2: transfer banner scoped to CSV suggestions only. F3.3: Mark as Transfer added as explicit transaction action; Tag/Split/Transfer documented as mutually exclusive states.|
-|1.6|2026-04-05|F3.3/F3.4 rewritten: full 6-type transaction model (EXPENSE/INCOME/TRANSFER/REFUND/INVESTMENT/IOU) matching Buxfer's proven taxonomy; TYPE and TAG explicitly documented as fully orthogonal — every type can carry a tag; financial treatment table added; REFUND defined as negative expense reducing tag budget; split availability per type clarified; F3.4→F3.5 renumbered; type filter added to F3.6 search.|
-|1.7|2026-04-05|F3.4 simplified: type enum reduced to EXPENSE/INCOME/TRANSFER only; REFUND/INVESTMENT/IOU explicitly deferred with do-not-implement note.|
-|1.8|2026-04-05|F3.4/F3.5: splits supported on all transaction types including TRANSFER; split-blocking removed from TRANSFER; financial treatment table updated; F3.5 split UI note corrected.|
-|1.9|2026-04-05|F14 added: landing page. F15 added: auth + onboarding. F16 added: session management. F17 added: notification system. Non-goals and phased delivery updated.|
-|1.10|2026-04-06|F2.5 rewritten: full ingestion surface documented — /api/ingest is machine-to-machine only; file imports are browser-only; two auto-detected formats (canonical Goaldy + Moneyman webPost); account mapping via moneyman_account_mappings; OpenAPI spec and Postman collection added as deliverables; Upstash deferred to Phase 2.|
-|1.11|2026-04-09|F1.1 sidebar grouping updated — accounts grouped by exact DB type (no liquidity-class aggregation); active account highlighted. F1.4 FX updated — Frankfurter API replaces Bank of Israel/ECB; base currency read from `meta` table key `base_currency`; in-process 1h cache. F1.5 expanded — Account View detail page documented with balance card, time horizon selector, transaction list, and edit/archive actions. F1.6 added — Account Archive & Restore feature. F3.1 updated — Time Horizon Selector documented (calendar presets, rolling windows, custom range, URL-reflected state, back/next navigation).|
-|1.12|2026-04-13|F1 navigation restructured — sidebar reduced to 4 primary items (Dashboard, Transactions, Budgets, Plan) + "More" flyout (Reports, Tags, Rules); user info removed from sidebar footer and moved to UserDropdown in topbar. F8 Goals superseded by F8 Plan — three-pillar financial planning system (Goals & Events, Emergency Savings, Retirement); old Goals feature (Type A/B/C goal types) deprecated and replaced by Plan Items model. New non-goal added: old Goals feature.|
-|1.13|2026-04-15|UI Position Jargon section added (§1.4). F4.5 Tag Detail View updated — breadcrumb shows leaf segments only, parent tag views aggregate all descendant transactions, tab view toolbar has empty topbar title with breadcrumb in view. F3.1 updated — transaction list tag filter and full URL-param persistence added.|
-|1.14|2026-04-18|§1.4 Financial Term Definitions added — Income/Expense (excludes transfers, P&L) vs Inflow/Outflow (includes transfers, per-account cash movement). F1.5 Account View KPI cards now show Inflow/Outflow, not Income/Expense. `transactions.summary` returns both pairs.|
-|1.15|2026-04-19|F2.5 ingest updated — `companyId` removed from canonical schema; `account` renamed to `externalAccountId`; account mapping is now source-agnostic (`account_mappings` table, keyed by `{userId, externalAccountId}`). Settings expanded: 6-tab structure documented (Profile & Locale, Security, Integrations, Sync, Notifications, Data); Sync tab: default dashboard account selector, 6 wired sync toggles, full alias CRUD (add/delete); Notifications tab: per-event email toggles for sync.failed, drive.disconnected, session.new_device, weekly.digest; Profile tab: sidebar position Left/Right (cookie-persisted, always defaults to Left). F17 notification preferences UI implemented — Settings → Notifications tab, email channel per-event toggles, persisted to `notification_preferences` table in Postgres.|
+> **Reset note:** This document was reset to a clean, forward-looking baseline on 2026-06-07. All prior architecture explorations (cloud relay, browser-side SQLite, Google Drive sync, Postgres, tiered Free/Pro model) are **superseded and intentionally not preserved**. The product is now a single-user, self-hosted app with one SQLite file managed by the backend. The changelog below starts here and tracks changes going forward.
 
 ---
 
-## 1. Product Overview
+## Change Log
 
-### 1.1 Purpose
-
-Goaldy is a personal financial intelligence platform for technically sophisticated users managing complex financial lives — multiple accounts, multiple currencies, investment portfolios, and real planning needs that current tools handle inadequately. The primary user is an Israeli professional with both Israeli and international financial accounts who currently duct-tapes together Moneyman, Buxfer, and manual spreadsheets to get an incomplete picture.
-
-### 1.2 Design Principles
-
-**No methodology religion.** Goaldy does not impose a budgeting system. It presents financial data clearly and lets the user draw their own conclusions. No envelopes, no "jobs for every dollar," no guilt mechanics.
-
-**Tag-first architecture.** Everything is a tag. The tag tree is the universal taxonomy for accounts, transactions, budgets, goals, and reports. There is no separate "category" concept.
-
-**The app hydrates from your data — it does not own it.** Financial data lives in the user's Google Drive. The app is a shell. This is a product principle, not just a technical decision — it should be communicated to users as a feature.
-
-**Buxfer is the feature baseline, Monarch is the UX baseline.** Buxfer has earned its users through 15 years of financial tool discipline — the tag hierarchy, the budget table, the tag detail drill-down are all worth preserving. Monarch's visual language — clean, modern, professional — is the target aesthetic. Goaldy surpasses both.
-
-**The primary user is User #1.** Every feature that ships must solve a real problem for the builder's own daily financial life. Hypothetical users come second.
-
-### 1.4 UI Position Jargon
-
-This section defines canonical terms for zones and positions within the Goaldy UI. Use these terms consistently in requirements, bug reports, and implementation discussions to avoid ambiguity.
-
-#### Shell Zones (always visible)
-
-| Term | Description |
-|---|---|
-| **Topbar** | The 52 px fixed horizontal bar at the very top of the shell. Contains the current page title (left) and the UserDropdown (right). On views that carry their own identity in the view toolbar (e.g. Tag Detail), the topbar title is intentionally empty. |
-| **Sidebar** | The left vertical navigation panel. Contains the primary nav items, the "More" flyout, and the account tree below. |
-
-#### View Zones (per-page content area)
-
-| Term | Description |
-|---|---|
-| **View toolbar** | The first row inside a page's content area, immediately below the topbar. Contains the page's primary identity and controls. |
-| **Left slot** | Leftmost position of the view toolbar. Contains page identity: title, breadcrumb, or primary filter (e.g. account selector on Dashboard). |
-| **Right slot** | Rightmost position of the view toolbar. **Always occupied by the Horizon Selector** when a time range is relevant to the view. |
-| **KPI row** | The row of stat cards immediately below the view toolbar. Each card shows a single headline metric with a label and optional subtitle. |
-| **Content area** | Everything below the KPI row — charts, tables, lists, and sub-panels. |
-
-#### Horizon Selector Placement Rule
-
-> **The Horizon Selector always occupies the right slot of the view toolbar.** No other control is placed to its right. Other controls (filters, action buttons, breadcrumbs) sit in the left slot or between left and right slots, with a flex spacer pushing the Horizon Selector to the far right.
-
-#### Breadcrumb Convention (Tag Detail and similar hierarchical views)
-
-- The topbar title is **empty** on views that show a breadcrumb in the view toolbar.
-- The breadcrumb reads left-to-right from the hierarchy root to the current item, separated by ` / `.
-- Each ancestor is a clickable link. The current (leaf) item is non-interactive.
-- Tag names in the DB store the full path (e.g. `"Credit Cards / Hadar"`). The breadcrumb displays only the **leaf segment** of each level's name — the part after the last ` / ` — so each hierarchy level appears exactly once with no duplication.
-- Example: tag name `"Real Estate / Bat-Galim / Homeowner Insurance"` with parent `"Real Estate / Bat-Galim"` and grandparent `"Real Estate"` renders as:  
-  `Tags / Real Estate / Bat-Galim / Homeowner Insurance`
-
-#### Financial Term Definitions
-
-Goaldy uses two distinct pairs of money-flow terms. Using them consistently across the UI, code, and docs avoids confusion.
-
-| Term | Includes transfers? | Used where |
-|---|---|---|
-| **Income** | No | P&L analysis, Dashboard KPI row, Tag Detail, Budget |
-| **Expense** | No | P&L analysis, Dashboard KPI row, Tag Detail, Budget |
-| **Inflow** | Yes | Account View KPI cards |
-| **Outflow** | Yes | Account View KPI cards |
-
-**Why the distinction matters:**
-- A transfer between two accounts is not income or expense — it moves money without creating or consuming value.
-- On the Account View, transfers **are** meaningful: a ₪10,000 transfer into a savings account is real inflow for that account even though it does not affect P&L.
-- Using Income/Expense on the Account View would undercount actual cash movement (e.g. a checking account that receives salary + transfers would show only salary as "income").
-
-**Implementation rule:** The `transactions.summary` tRPC procedure returns both pairs. Callers use `income`/`expense` for P&L views and `inflow`/`outflow` for per-account cash movement views. The `inflow`/`outflow` fields are only meaningful when `accountId` is provided; globally they are zero.
-
-#### Parent Tag Aggregation Rule
-
-> **Viewing a parent tag shows all transactions tagged with that tag OR any of its descendants at any depth.** A user landing on "Credit Cards" sees transactions tagged "Credit Cards", "Credit Cards / Hadar", "Credit Cards / Nisan", etc. Stats (cashflow, expense, income) and charts aggregate across the entire subtree. This is implemented via a recursive CTE at the DB layer — no UI workaround needed.
+| Version | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **3.0** | 2026-06-07 | Clean baseline. Single-user self-hosted app. Node + Express backend, React frontend, one SQLite file holding financial data + user settings + preferences. Generic REST API (all resources, all verbs) with bearer-token auth; `POST /api/transactions` is the batch, idempotent ingest primitive. Full OpenAPI/Swagger spec is a required deliverable. All prior session history collapsed and dropped. |
 
 ---
+
+## 1. Overview
+
+### 1.1 What Is Goaldy?
+
+Goaldy is a **self-hosted personal finance ledger** you run on your own server (or NAS). It's a single-user web app that replaces Buxfer with a cleaner, faster interface and a complete REST API for integration.
+
+**The pitch:** Download Docker image. Run on your server. Log in. Import your Buxfer export. Never use Buxfer again.
+
+**One file, one source of truth.** Financial data, user settings, and preferences all live in a single SQLite file managed entirely by the backend. There is no second datastore, no external config service, no browser-side database. Back up one file, you've backed up everything. Move one file, you've migrated the whole app.
+
+### 1.2 Why It Exists
+
+Buxfer is 15+ years old. Its UI is dated. Its feature set is bloated with things you don't need. You manage Israeli + international accounts, run Moneyman locally, and want a **single dashboard that doesn't make you angry every time you open it.**
+
+Goaldy solves that. It's:
+
+- **Fast** — all queries sub-100ms (local SQLite)
+- **Clean UI** — Monarch-grade visual design, not Buxfer's 2010s aesthetic
+- **Yours** — runs on your hardware, data never leaves
+- **Open** — full REST API (you can build integrations)
+- **Simple** — one user, no collaboration, no complexity
 
 ### 1.3 Success Criteria
 
-**Phase 0 success:** Builder stops using Buxfer and uses Goaldy daily for all financial tracking.
+**Phase 0 ship gate:** You delete your Buxfer account and use Goaldy daily.
 
-**Phase 2 success:** 10 Moneyman community users adopt Goaldy and report it superior to their previous tool.
+That's it. No secondary goals. One user. Done.
 
-**Phase 3 success:** Users report that Goaldy's goal planning feature replaced a spreadsheet or mental math they were doing manually.
+### 1.4 Design Principles
 
----
+**No methodology religion.** Present data clearly. Don't impose a budgeting philosophy. YNAB has "jobs for every dollar." Goaldy has tags. Users pick how to use them.
 
-## 2. User Personas
+**Tag-first.** Tags are the universal taxonomy. Everything maps to tags: accounts, transactions, budgets, reports. No separate "category" concept.
 
-### Primary: The Dual-Market Professional
+**Buxfer feature baseline.** If Buxfer does it and it works, keep it:
 
-- Israeli tech professional, 30–50 years old
-- Household income: combined ₪30,000–60,000/month
-- Financial complexity: Israeli checking/savings + mortgage + pension + קרן השתלמות + US brokerage + credit cards across 2–3 banks
-- Currently using: Moneyman (self-hosted Docker) + Buxfer or Google Sheets
-- Pain points: no single view of Israeli + international accounts; Buxfer UI is dated; no forward planning tool; manual mental math for future expense planning
-- Technical comfort: high — runs Docker, understands APIs, reads GitHub READMEs
+- Tag hierarchy (parent/child)
+- Budget tracking by tag + period
+- Split transactions (tag + amount pairs)
+- Transfer detection and deletion
+- CSV import
+- Multi-currency + exchange rates
+- Account snapshots (for investments, property)
 
-### Secondary: The Technically Adjacent User
+**Monarch UX baseline.** Clean. Modern. Professional. No cutesy icons or artificial gamification.
 
-- Partner or friend of the primary persona, referred by word of mouth
-- Less technically comfortable — won't self-host Moneyman but will use a well-designed web app
-- Relies on CSV export from their bank
-- Pain points: existing tools too complex or too US-centric; no Hebrew support
+**Single-user only.** No household mode. No shared ledger. One login, one data set. This is not a feature gap—it's a design choice that keeps code simple.
 
 ---
 
-## 3. Feature Areas
+## 2. User Persona
+
+### The Builder (You)
+
+- Israeli tech professional
+- Runs Moneyman in Docker locally
+- Multiple accounts: Israeli banks + international brokerage + credit cards
+- Currently uses Buxfer (frustrated) + Google Sheets (manual)
+- Technical: deploys Docker, writes bash scripts, reads REST API docs
+- Pain: "Why is Buxfer's UI so slow? Why is there no Hebrew support? Why do I have to manually track my pension?"
+
+**What you want:**
+
+- One dashboard: Israeli + international accounts
+- Import from Moneyman (CSV export or API)
+- Tag everything, slice reports by tag
+- Budget tracking (monthly, quarterly, custom periods)
+- See net worth, expense trends, where money went
+- Hebrew UI + RTL support
+- Run it on your NAS, keep all data local
+- Never depend on a third-party SaaS again
 
 ---
+
+## 3. Core Features (Phase 0)
 
 ### F1 — Accounts
 
-#### F1.0 Application Shell — Navigation
+**Liquidity-based grouping (left sidebar):**
 
-**Sidebar (left, always visible):**
+- Liquid Assets (checking, savings)
+- Investments (brokerage, stocks)
+- Locked (pension, קרן השתלמות)
+- Real Estate (property, estimated value)
+- Loans (mortgage, car, credit)
+- Credit Cards (liabilities, shown negative)
+- Archived (hidden by default)
 
-The sidebar has two zones:
-1. **Primary navigation** — 4 fixed items, always visible:
-   - Dashboard (house icon)
-   - Transactions (arrows icon)
-   - Budgets (piggy bank icon)
-   - Plan (calendar range icon)
-2. **More flyout** — a "More ▾" button below the 4 primary items. Clicking opens a fixed-position flyout panel to the right of the sidebar showing:
-   - Reports
-   - Tags
-   - Rules
-   Closes on outside click, on navigation, or on Escape. The "More" button is highlighted when the current route matches any More item.
-3. **Account tree** — below navigation, scrollable, shows all non-archived accounts grouped by type with their balances.
+**Account types:**
 
-The sidebar has **no user footer**. User information (name, avatar, logout) is in the topbar UserDropdown.
+- Checking / Savings / Credit Card / Loan → transaction ledger balance
+- Investment / Pension / Real Estate / Manual → point-in-time snapshots
+  - User enters: date, value, optional note
+  - System shows balance + value history chart
 
-**Topbar (top, always visible):**
+**Multi-currency:**
 
-- Left: breadcrumb / page title
-- Right: **UserDropdown** — avatar circle (indigo, initials) + user name + chevron. Clicking opens a dropdown:
-  - Header: name (bold) + email (muted), non-interactive
-  - Settings (→ /settings)
-  - Preferences (→ /settings/preferences)
-  - Billing (→ /settings/billing)
-  - Log out (red text, calls signOut)
+- Each account has base currency (ILS, USD, EUR, etc.)
+- Net Worth converts all to display currency (ILS default) using daily rates
+- Exchange rates cached in SQLite, refreshed daily
 
-#### F1.1 Account Overview
+**Account management:**
 
-The left sidebar displays all accounts grouped by their exact DB account type (1:1 mapping — no aggregation). Net Worth total is pinned at the top of the account tree.
+- Create, edit, archive
+- Reorder (drag-and-drop)
+- Rename, pick institution, pick icon
 
-**Account type sections (one section per type present in the data):**
+### F2 — Transactions
 
-- Checking
-- Savings
-- Credit Cards
-- Investments
-- Loans
-- Real Estate
-- Retirement
-- Manual
-- Archived (closed accounts, collapsed by default, no group balance shown)
+**Core fields:**
 
-Each section is collapsible. The active account is highlighted with an indigo background. Individual account balances are shown in their native currency; section totals and Net Worth are shown in the user's base currency (converted via FX rates — see F1.4).
+- Date
+- Account
+- Type (expense | income | transfer)
+- Amount
+- Description
+- Merchant (optional, for rules matching)
+- Status (cleared | pending)
+- Tag (single) OR Splits (multiple tag + amount pairs)
+- Labels (optional, multiple, non-financial)
+- Notes
 
-Clicking any account navigates to the Account View (see F1.5).
+**TYPE vs TAG are orthogonal:**
 
-**Net Worth total** is pinned at the top; clicking navigates to the Net Worth dashboard tab.
+- TYPE controls financial treatment (expense reduces budget, income increases cashflow, transfer skipped in reports)
+- TAG is the user's categorization (Food, Rent, Healthcare, etc.)
+- Every type can carry any tag
+- Example: Transfer between Checking → Savings tagged as "Emergency Fund" (tells you what the transfer was for)
 
-#### F1.2 Account Types
+**Transaction actions:**
 
-|Type|Sub-type|Balance source|Notes|
-|---|---|---|---|
-|Checking|—|Transaction ledger|Standard|
-|Savings|—|Transaction ledger|Standard|
-|Credit Card|—|Transaction ledger|Balance shown as negative|
-|Investment|Brokerage, Stock Plan, Crypto|Manual snapshot|No individual holdings|
-|Pension|Defined contribution|Manual snapshot|Locked|
-|קרן השתלמות|—|Manual snapshot|Locked; vesting date tracked|
-|Real Estate|Property|Manual snapshot|Illiquid|
-|Loan|Mortgage, Car, Other|Transaction ledger|Shown as negative|
-|Manual|Any|Manual snapshot|Catch-all for non-standard assets|
+- Edit
+- Mark as transfer (triggers peer detection)
+- Add/edit splits
+- Add labels
+- Delete (with confirmation)
 
-#### F1.3 Manual Snapshot Accounts
+**Splits:**
 
-For accounts without a transaction stream, the user records point-in-time value updates. Each update stores: value, date, optional note. The system displays the most recent snapshot as the current balance and shows a value history chart on the account detail view.
+- Single-tag transactions: one tag, 100% of amount
+- Split transactions: multiple tag+amount pairs, must sum to 100%
+- Cannot split a transfer transaction (TYPE = transfer is atomic)
+- UI: one-click "Split this" opens split editor
 
-Snapshot update is accessible via a prominent "Update Balance" action on any snapshot-based account.
+**Transfer detection:**
+User marks one leg as TYPE = TRANSFER → system searches opposite account for peer:
 
-#### F1.4 Multi-Currency
+- Same amount (±0.5% tolerance)
+- Within ±2 days
+- If found: shows match, user confirms delete
+- If not found: saves as unmatched transfer (no peer to delete)
 
-Each account has a base currency. Individual account balances are displayed in their native currency. The Net Worth total, section totals, and all aggregations convert to the user's **base currency** (default: `ILS`, stored as `base_currency` in the `meta` table) using exchange rates from the **Frankfurter public API** (`api.frankfurter.app`).
+**Labels:**
 
-**FX details:**
-- Frankfurter is free, requires no API key, and is backed by ECB reference data (~30 major currencies: USD, EUR, GBP, ILS, JPY, CHF, etc.)
-- Rates update once per ECB business day
-- Server-side in-process cache with 1-hour TTL — at most one Frankfurter request per hour per base currency; no additional storage in `goaldy.db`
-- Conversion: `amount_in_base = amount_in_foreign / rate` where `rate` = Frankfurter's `1 base = X foreign`
-- If a rate is unavailable for a currency, the amount is passed through unconverted with a console warning (graceful degradation)
+- Multiple per transaction, non-financial (do not affect budgets/reports)
+- Example: #lunch, #reimbursable, #work
+- Useful for filtering/slicing but don't change number meaning
+- Suggested vocabulary: work, reimbursable, lunch-and-learns, recurring, etc.
 
-Future: rate display transparency (hover to show rate and date) is deferred to Phase B.
+### F3 — Tagging
 
-#### F1.5 Account View
+**Tag hierarchy:**
 
-Each account has a dedicated Account View page (`/accounts/[id]`) with:
+- Parent → children (unlimited depth)
+- Example: Food → Coffee, Groceries, Restaurants
+- Siblings are ordered alphabetically. There is no manual ordering — dropped as unnecessary, and `tags.sort_order` was removed with it.
 
-**Header card:**
-- Account name, type, institution
-- Current balance in native currency
-- Balance source indicator (`computed from transactions` or `reported value`)
-- Edit button (opens inline edit form for name, type, currency, institution, balance mode, reported value)
-- Archive button (hidden when account is already archived)
+**Budget configuration (on tags):**
 
-**Time Horizon Selector:**
-A single dropdown button with back/next arrow navigation, reflecting the selected period in the URL (`?range=`, `?dateFrom=`, `?dateTo=`).
+- Budget amount (optional)
+- Budget type (expense or income)
+- Budget period (weekly, biweekly, monthly, quarterly, custom)
+- Period dates (start/end)
+- Rollover (carry unused budget to next period?)
+- Account scope (restrict to one account, or all?)
 
-Preset groups:
-- **Calendar** — This Week, This Month, This Year, Last Week, Last Month, Last Year (back/next snaps to full calendar periods: month = first–last day, week = Sun–Sat, year = Jan 1–Dec 31)
-- **Rolling** — 7D, 30D, 60D, 90D, 180D, 3M, 6M, 12M (back/next shifts by the window size; becomes CUSTOM after step)
-- **All Time** — no date filter; arrows disabled
-- **Custom** — manual date-from / date-to inputs with Apply button; arrows navigate by the selected duration
+**Tag detail view:**
 
-The button label reflects the active period (e.g. "April 2026", "Last 30 Days", "Mar 30 – Apr 5").
+- Show all transactions tagged (with splits showing partial amount)
+- Show budget progress (amount spent / budget)
+- Show trend (spending over last 3, 6, 12 months)
+- Show burn rate (if trending, when will budget run out?)
 
-**Transaction list:**
-- Scoped to this account, filtered by the active time horizon
-- Running balance column shown for `balance_source = 'transactions'` accounts
-- Running balance is chronologically correct regardless of the selected time horizon — computed from the all-time account total, walking newest → oldest
+**Tag management:**
 
-#### F1.6 Account Archive & Restore
+- Create, rename, reparent, delete
+- Create tags on the fly from a typed path (`Food / Groceries / Tea` mints the missing segments)
+- Deleting a tag with transactions or children forces a choice: untag them, or move them to another tag
+- An unused tag (no transactions, no children) deletes with no confirmation
+- Color + icon per tag (for UI)
 
-Accounts can be archived to remove them from the active account list and net worth without deleting their transaction history.
+### F4 — Budgets
 
-**Archive flow:**
-- "Archive Account" button in the Account View header (hidden if already archived)
-- Confirmation modal with explicit warning and a red "Archive" button
-- On confirm: `is_closed = 1` in the DB; user is redirected to the dashboard
-- Archived accounts are excluded from `accounts.list` and net worth calculations
-- Archived accounts appear in a collapsed "Archived" section at the bottom of the sidebar (no group balance shown)
+**Display:**
 
-**Restore flow:**
-- An amber banner at the top of the Account View indicates the account is archived
-- "Restore Account" button in the banner
-- On confirm: `is_closed = 0`; page reloads showing the account as active
-- No redirect — user stays on the account page
+- Dashboard: all tags with budgets, progress bars, over/under status
+- Table view: sort by status (over budget, on track, way under)
+- Detailed view per tag: spending by week/month, trend, remaining days in period
 
-**Accounts with no matching entry in accounts.csv during Buxfer migration** are automatically created as archived (`is_closed = 1`).
-
-#### F1.7 Account Management
-
-- Create, edit, archive/restore accounts
-- Reorder accounts within groups via drag-and-drop
-- Move accounts between groups (changes account type)
-- Link an account to a sync connection (SimpleFIN for US banks)
-- Export account transactions as CSV
+**Budget math:**
 
----
+- For monthly budget: (amount spent / budget) × 100
+- If period is custom (e.g., "next 3 months starting Jul 1"), calculate prorated
+- Show projected end-of-period (if spending continues, will you overspend?)
 
-### F2 — Data Ingestion
-
-#### F2.1 Ingest Sources
-
-|Source|Who it serves|Setup|
-|---|---|---|
-|Moneyman webhook|Israeli bank users (technical)|API key + one Moneyman config line|
-|SimpleFIN Bridge|US/Canadian bank users|Paste access token; $15/year to SimpleFIN|
-|CSV file import|All users|Upload file; parser auto-detects format|
-|OFX / QIF import|All users|Standard financial export format|
-|Manual transaction entry|All users|Direct UI entry|
+**Non-budgeted tags:**
 
-#### F2.2 File Import Parsers
+- Transactions without budgets still tracked
+- Dashboard shows them in "Unbudgeted" section
+- Can convert to budgeted by editing tag
 
-Named parsers for Israeli institutions (each bank exports a different column schema): Hapoalim, Leumi, Discount, Mizrahi, Max/Leumi Card, Isracard, Visa Cal, Pepper, One Zero, Beinleumi, Otsar Hahayal.
+### F5 — Rules & Auto-Tagging
 
-Generic CSV parser with interactive column mapping UI for unrecognized formats. Column mapping is saved per institution — user maps once, never again.
-
-Migration parsers: Buxfer full export (maps tags, accounts, rules), Actual Budget `.db` direct SQLite import, YNAB CSV.
-
-#### F2.3 Import UX
-
-1. User drops file or pastes API token
-2. Parser detects format, previews first 10 rows with proposed field mapping
-3. User confirms or adjusts mapping
-4. System runs dedup check — shows count of new vs duplicate transactions
-5. **System runs transfer detection pass** — flags likely transfer pairs for review (see F2.6)
-6. Runs rules engine on non-transfer transactions — shows auto-tag preview
-7. User confirms import
-8. Unmatched transactions surface in triage queue; transfer candidates surface in Transfer Review queue
+**Rules (Phase 0 basic):**
 
-#### F2.4 Deduplication
+- Pattern: merchant name contains "X" → assign tag Y
+- Regex support for advanced users
+- Amount range (if amount > 500, tag as "big purchase")
+- Account filter (only apply to one account)
+- Rule priority (execute in order, first match wins)
+- Enable/disable per rule
 
-Every transaction is assigned an `import_hash` computed from `SHA-256(date + amount + description + account_id)`. Re-importing the same file or overlapping date ranges produces no duplicates. The dedup preview shows exactly how many transactions were skipped and why.
+**UI:**
 
-#### F2.5 Ingest API
+- Settings → Rules
+- Add rule: pick pattern type, enter pattern, pick tag, set priority
+- Test rule: preview against last 10 transactions
+- Delete rule
 
-**`POST /api/ingest`** — the machine-to-machine data entry surface. Authenticated via per-user API keys (created in Settings → Integrations, shown once, stored as SHA-256 hash). Rate limiting stubbed for Phase 0; implemented at scale in Phase 2.
-
-**This endpoint is exclusively for programmatic pushes.** File imports (CSV, OFX, Buxfer export) are processed entirely in the browser and written directly to OPFS — they never touch this endpoint.
-
-**Supported formats (auto-detected — no format parameter needed):**
-
-|Format|Detection signal|Who sends it|
-|---|---|---|
-|Canonical Goaldy|Array with `externalAccountId` field|Custom scripts, migration tools|
-|Moneyman `webPost`|Array with `"scraped at"` key (space in key name)|Moneyman automated scraper|
-
-**Canonical Goaldy format** — the primary format, modeled on the israeli-bank-scrapers/Buxfer transaction schema:
-
-```json
-[{
-  "type": "normal",
-  "date": "2026-04-02T21:00:00.000Z",
-  "originalAmount": -3065.14,
-  "originalCurrency": "ILS",
-  "chargedAmount": -3065.14,
-  "description": "7578 - כרטיסי אשראי לי",
-  "externalAccountId": "59641",
-  "hash": "2026-04-02T21:00:00.000Z_-3065.14_...",
-  "uniqueId": "2026-04-03_59641_-3065.14_8547",
-  "status": "completed"
-}]
-```
-
-**Moneyman `webPost` format** — sent automatically when Moneyman is configured with `storage.webPost`. Adapted server-side to canonical format before encryption:
-
-```json
-[{
-  "date": "02/04/2026",
-  "amount": -3065.14,
-  "description": "7578 - כרטיסי אשראי לי",
-  "account": "59641",
-  "scraped at": "2026-04-03",
-  "scraped by": "beinleumi",
-  "chargedCurrency": "ILS"
-}]
-```
-
-Moneyman config (zero additional configuration required beyond URL and API key):
-
-```json
-{
-  "storage": {
-    "webPost": {
-      "url": "https://app.goaldy.com/api/ingest",
-      "authorizationToken": "Bearer <goaldy-api-key>"
-    }
-  }
-}
-```
-
-**Account mapping** — both formats identify accounts by `externalAccountId` (a raw account number or identifier from the source). The mapping from `externalAccountId` → Goaldy account UUID is stored in Postgres (`account_mappings`, keyed by `{userId, externalAccountId}`) and managed in Settings → Sync → Account Mappings. The mapping is source-agnostic — REST API, Moneyman webhooks, and custom scripts all use the same table. Transactions arriving with no matching mapping are queued as unmapped — never silently dropped — and surfaced in the triage banner for the user to resolve.
-
-**Response:**
-
-```json
-{
-  "queued": 12,
-  "unmapped": 2,
-  "format": "moneyman",
-  "errors": []
-}
-```
-
-**OpenAPI spec** is served at `/openapi.yaml`. **Postman collection** for testing is at `/goaldy-ingest.postman_collection.json`. Both are generated during repo bootstrap.
-
-All server-side ingest (this endpoint, and later SimpleFIN cron) goes through the encrypted blob queue — the server stores AES-256-GCM encrypted payloads with 48h TTL, decrypted and ingested on next browser session open, then immediately deleted. No readable financial data ever persists on Goaldy's servers.
-
-**Full ingestion surface:**
-
-|Source|Path|Processing|
-|---|---|---|
-|Moneyman `webPost`|`POST /api/ingest`|Server: detect → adapt → encrypt → blob|
-|Custom script|`POST /api/ingest`|Server: validate → encrypt → blob|
-|CSV file upload|Browser only|Client: named parser → OPFS|
-|OFX/QIF upload|Browser only|Client: standard parser → OPFS|
-|Buxfer export|Browser only|Client: migration parser → OPFS|
-|Manual entry|Browser only|Client: form → OPFS|
-|SimpleFIN (Phase 2)|Internal cron|Server: fetch → encrypt → blob|
-
-#### F2.6 Transfer Handling
-
-Bank scrapers (Moneyman, israeli-bank-scrapers, SimpleFIN) import both sides of every internal transfer as separate transactions — one debit on the source account, one credit on the destination account. Both land in Goaldy's ledger. This is correct behavior. The user then marks one as a transfer, which triggers peer detection and deletion of the duplicate.
-
-**The flow:**
-
-```
-Scraper imports both sides:
-  059641-FIBI Joint    3 Apr    −₪2,507    כרטיסי אשראי ל - 8212
-  8212-Nisan           3 Apr    +₪2,507    כרטיסי אשראי ל - 8212
-
-User opens one transaction → sets TYPE = TRANSFER
-  Source account:       059641-FIBI Joint
-  Destination account:  8212-Nisan
-  Tag (optional):       Credit Cards / Nisan
-
-On save, detection fires:
-  Searches 8212-Nisan for a transaction matching:
-    amount = +₪2,507 (opposite sign)
-    date within ±2 days
-  Match found → "We found a matching transaction on 8212-Nisan — delete it?"
-
-User confirms → peer hard-deleted → transfer record remains
-```
-
-**The transfer record** (the remaining transaction) is excluded from all expense/income calculations — budgets, dashboards, reports, cashflow — because its `type = 'transfer'`. The tag on a transfer transaction is informational only; it does not feed the budget engine or appear in tag reports. It remains visible in the account transaction list with arrow notation showing source → destination.
-
-**Transfer type fields** — when TYPE is set to TRANSFER, the edit form shows:
-
-- Source account (dropdown — the account the money came from)
-- Destination account (dropdown — the account the money went to)
-- Tag (optional — for user reference, no financial impact)
-
-**Detection algorithm:**
-
-- Searches destination account for opposite-sign transaction
-- Amount match: exact or within 0.5% tolerance (handles rounding)
-- Date tolerance: ±2 days (handles Israeli banking posting delays)
-- If multiple candidates found: presents a list for user to select the correct peer
-- If no match found: saves the transfer record as an unmatched transfer — the user is informed and can search manually
-
-**Unmatched transfers** — occur when one account is not synced in Goaldy (e.g. an external wire to a US account not connected via SimpleFIN). The transfer record is saved with TYPE = TRANSFER, source set, destination left as "External account." Excluded from reports. No peer deletion attempted.
-
-**Transfer Review banner** — removed from the triage flow entirely. There is no automatic detection on import. The banner in F3.2 is retained only to surface transactions that were previously auto-detected with high confidence (see below).
-
-**CSV import fallback (best-effort only):** for CSV imports where no transfer metadata is provided by the source, the system runs a background heuristic pass after import — same matching criteria as above. High-confidence matches (same day, exact amount, known payment description pattern, different accounts) are surfaced as suggestions in the Transfer Review banner. This is advisory, never automatic. User opens the suggested pair, sets one as TYPE = TRANSFER manually, and confirms deletion. Medium and low confidence matches are silently skipped.
-
----
-
-### F3 — Transaction Management
-
-#### F3.1 Transaction List
-
-The primary workspace for financial data. Accessible globally (all accounts) or scoped to a single account (from the Account View — see F1.5) or a single tag (from tag detail view).
-
-**Columns:** Date · Amount · Description · Merchant · Tag · Account · Status
-
-Note: "Tag" is singular. A transaction has either one tag (covering 100% of the amount) or a split (multiple tags each covering a defined portion that sums to 100%). There is no multi-tag concept — see F3.4.
-
-**Running balance column** — shown only when the list is scoped to a single account with `balance_source = 'transactions'`. The balance is chronologically correct regardless of the active time horizon (computed from the all-time account total; the most recent transaction's balance always matches the account header card balance).
-
-**Default sort:** Date descending. Sortable by any column.
-
-**Time Horizon Selector** — a single dropdown button with back/next arrow navigation, present on the Account View transaction list. Selected period is reflected in the URL (`?range=`, `?dateFrom=`, `?dateTo=`) for shareability and browser history support. See F1.5 for full preset list and navigation behaviour.
-
-**30-Day Forecast section** — pinned at the top of any transaction list, collapsible. Shows upcoming projected transactions based on:
-
-- Budget repeat schedules (user-configured)
-- Detected recurring patterns (system-detected from transaction history — e.g. same merchant, similar amount, regular interval, 3+ occurrences)
-- Scheduled goals contributions
-
-Forecast transactions are visually distinct (dashed border, lighter color, clock icon). Clicking a forecast row opens a detail panel showing the pattern that generated it and options to edit or dismiss.
-
-#### F3.2 Triage and Transfer Banners
-
-Two distinct banners appear above the transaction list when action is needed. They are visually separate and never merged into one.
-
-**Triage banner** — untagged transactions:
-
-```
-14 transactions need tagging  ·  94% auto-tagged  ·  [Review now →]
-```
-
-The auto-tagged percentage is the primary health metric for the categorization system. A mature setup sustains >95%.
-
-**Transfer Review banner** — CSV-imported transfer suggestions only (not shown for scraper-imported data where the user handles transfers manually via the Edit Transaction flow):
-
-```
-3 possible transfer pairs found  ·  [Review →]
-```
-
-Each suggestion shows the two candidate transactions side by side. The user opens one, sets TYPE = TRANSFER with source/destination accounts, and the peer is detected and deleted. "Not a transfer" dismisses the suggestion permanently.
-
-#### F3.3 Transaction Actions
-
-Available on every transaction row (expanded on click or hover):
-
-|Action|Description|
-|---|---|
-|Tag|Assign or change the tag for this transaction (available on all types)|
-|Split|Replace the single tag with a multi-row split covering 100% of the amount (expense, income, refund only)|
-|Label|Add or remove labels — free-form dimensional markers with no financial impact|
-|Set Type|Change the transaction type (see F3.4)|
-|Edit|Change date, description, amount, notes|
-|Copy|Duplicate with editable fields|
-|Repeat|Create a scheduled recurrence from this transaction|
-|Add Rule|Create a categorization rule from this transaction's fields|
-|Add Memo|Attach a free-text note|
-|Delete|Remove transaction (with confirmation)|
-
-**TAG and TYPE are fully orthogonal.** Every transaction type can carry a tag. The type controls financial treatment — how the transaction is counted in calculations. The tag controls categorization — which budget line or report group it contributes to. They never interfere with each other.
-
-#### F3.4 Transaction Types
-
-Every transaction has a TYPE field. Auto-assigned on import based on amount sign and provider metadata. Always user-overridable.
-
-**EXPENSE** (default for negative amounts) Counts in the expense dashboard. Tag drives which budget line is charged. Splits allowed.
-
-**INCOME** (default for positive amounts) Counts in the income dashboard. Tag drives which income budget line is credited. Splits allowed.
-
-**TRANSFER** Internal movement between two accounts in the user's ledger. Excluded from expense and income calculations entirely. Requires source account and destination account fields. Tag is for identification — does not affect any budget or report. Cannot be split. Triggers peer detection on save to identify and delete the duplicate counterpart transaction (see F2.6).
-
-**Financial treatment:**
-
-|Type|Expense dashboard|Income dashboard|Budget impact|Tag role|Splits|
-|---|---|---|---|---|---|
-|EXPENSE|✓|—|Charges tag budget|Full|✓|
-|INCOME|—|✓|Credits tag budget|Full|✓|
-|TRANSFER|—|—|None|Identification only|✓|
-
-**Auto-assignment on import:**
-
-- `amount < 0` → EXPENSE
-- `amount > 0` → INCOME
-- Provider marks as transfer → TRANSFER
-- All auto-assignments are user-overridable
-
-**TYPE and TAG are fully orthogonal.** Every type carries a tag independently. TYPE controls financial treatment. TAG controls categorization. They never interfere.
-
-> **Deferred types:** REFUND, INVESTMENT, and IOU are explicitly out of scope for the current version. They will be considered if a concrete need arises from real usage. Do not implement them.
-
-#### F3.5 Tagging Model — Single Tag or 100% Split
-
-A transaction exists in one of three tag states at all times. Note: tag state is independent of transaction type — every type can be in any tag state.
-
-**State A — Untagged** `tag_id: NULL`, no splits. Sits in the triage queue for EXPENSE and INCOME transactions. TRANSFER, INVESTMENT, and IOU types are excluded from the triage queue — they don't require a tag to function, though one can optionally be added.
-
-**State B — Single tag** `tag_id` set to one tag. 100% of the transaction amount is attributed to that tag for the applicable budget and report calculations. This is the common case.
-
-**State C — Split** `tag_id: NULL`. Two or more split rows exist, each with its own amount and tag. Splits must sum exactly to the parent transaction amount. **Splits are supported on all transaction types.**
-
-**The constraint is absolute:** a transaction cannot carry both a `tag_id` and splits simultaneously.
-
-**Split UI:**
-
-- Triggered by the "Split" action on any transaction
-- Modal showing parent transaction header (date, description, total amount, type)
-- Two or more split rows: amount field + optional description override + tag selector
-- Running balance bar — drains to zero; green when balanced, amber when partial, red if over
-- Last row auto-fills to remaining balance when clicked
-- All splits committed atomically on confirm
-
-**Goal funding split — primary use case:**
-
-```
-₪5,000 deposit (INCOME) — FIBI Savings — 1 Apr
-  ├── ₪1,500  Goals/Vacation 2026
-  ├── ₪2,000  Goals/Car Replacement
-  ├── ₪970    Goals/Roof Repair
-  └── ₪530    Savings/Emergency Fund    ← auto-filled to balance
-              ─────────────────────────
-              ₪5,000 ✓  balanced
-```
-
-**The Goal Allocation Assistant** — when an INCOME transaction lands in any liquid or semi-liquid account and is untagged, the intelligence feed surfaces a prompt: "₪5,000 unlinked deposit — your active goals needed ₪4,970 this month. Allocate now?" Tapping it opens the split modal pre-populated with goal requirements in priority order.
-
-#### F3.6 Transaction Search and Filter
-
-Global search across all transactions: fuzzy match on description and merchant. Filters: date range, account, **type (one or more)**, tag (including subtree), amount range, status (cleared/pending), source (moneyman/simplefin/csv/manual), category source (rule/ai/user/untagged), labels (one or more).
-
-Filter combinations are saveable as named views and accessible from a "Saved Views" dropdown in the transaction toolbar.
-
-#### F3.7 Labels
-
-Labels are dimensional markers on a transaction. They are completely separate from tags.
-
-**The distinction:**
-
-- **Tags** answer "where does this money go?" — financial classification, drives budgets, reports, goal attribution. One tag or splits summing to 100%.
-- **Labels** answer "what else is true about this transaction?" — orthogonal facts that don't affect financial calculations. Multiple labels allowed, no financial impact whatsoever.
-
-**What labels enable:**
-
-```
-Transaction: Business dinner  ₪800
-  Tag:    Business/Meals        ← single tag, drives budget
-  Labels: Tax/Deductible        ← marker only, filterable
-          Reimbursable          ← marker only, filterable
-```
-
-Running "filter by Tax/Deductible" gives a correct total of all deductible transactions without any double-counting or budget impact. Exporting "Reimbursable" transactions produces an accurate expense claim list. The budget engine sees ₪800 against Business/Meals and nothing else — labels are invisible to it.
-
-**Label properties:**
-
-- Free-form string — no predefined list, no tree structure, no color, no icon
-- Multiple labels per transaction — unlimited
-- Created on the fly by typing — autocomplete suggests existing labels from the user's history
-- Case-insensitive matching — "tax/deductible" and "Tax/Deductible" are the same label
-
-**Where labels appear:**
-
-- Transaction row (shown as small pills after the tag, visually distinct — outlined, not filled)
-- Transaction detail panel (editable inline)
-- Filter panel (select one or more labels to filter the transaction list)
-- Export (labels included as a column in CSV exports)
-
-**Where labels do not appear:**
-
-- Budget table (no label column, no label budget)
-- Dashboard charts (labels invisible to the report engine)
-- Tag detail view (labels don't affect tag aggregations)
-- Rules engine (rules assign tags, not labels — label assignment is always manual)
-- Intelligence feed calculations (anomaly detection, cashflow projection — all tag-based)
-
-**Common label vocabulary** — not enforced, just suggested on first use:
-
-|Label|Use|
-|---|---|
-|`Tax/Deductible`|Business expense eligible for deduction|
-|`Reimbursable`|Expense to be claimed back from employer|
-|`Recurring`|Subscription or scheduled payment|
-|`One-time`|Flag unusual non-recurring expenses|
-|`Business`|Work-related on a personal account|
-|`Joint`|Household shared expense on a personal account|
-|`Disputed`|Transaction under review or dispute|
-|`Cash`|Cash transaction manually entered|
-
-The user's label vocabulary grows organically. Labels used once appear in autocomplete forever until the user explicitly deletes them from Settings → Labels.
-
----
-
-### F4 — Tag System
-
-#### F4.1 Tag Tree
-
-Tags form an arbitrary-depth tree via parent-child relationships. There is no maximum depth. There is no separate "category" concept — everything is a tag.
-
-**The tag is the source of truth for everything:** classification, reports, budgets, goals, and rules all reference the tag. There is no separate budget record — budget configuration is a property of the tag itself.
-
-**Tag properties:**
-
-- Name (required)
-- Parent tag (optional — null means root tag)
-- Color (hex — used in charts and the tag tree sidebar)
-- Icon (emoji — optional, for display in lists)
-- Sort order (user-controlled drag-and-drop ordering within parent)
-- **Budget configuration** (optional — the full budget target, owned by the tag):
-    - Budgeted amount
-    - Budget type: EXPENSE or INCOME (determines which Budgets tab it appears on; inferred from dominant cash flow direction by default, overridable)
-    - Repeat period: Weekly / Biweekly / Monthly / Quarterly / Annually / Custom interval
-    - Start date
-    - Enable rollover (boolean — unused budget carries to next period)
-    - Repeat until (optional end date — for time-bounded budgets)
-    - Account scope (optional — restrict budget to transactions from one account)
-
-> **Note:** `is_income` has been removed. The income/expense classification for the Budgets screen is derived from the `budget_type` field on the tag's budget configuration, not from a flag on the tag itself. A tag with no budget configuration is classified by the system based on the dominant direction of its transactions (positive = income tendency, negative = expense tendency) when displaying in reports.
-
-**Example structure:**
-
-```
-Food
-  Groceries
-  Restaurants & Cafés
-  Snacks
-Housing
-  Rent (Or Mortgage)
-  Cleaning
-  HOA
-  Municipal Tax
-Kids
-  Daycare
-  Babysitter
-  Activities
-  Gifts
-  Toys
-Goals                    ← auto-generated root; see F8
-  Goals/Vacation 2026
-  Goals/Car Replacement
-```
-
-#### F4.2 Transaction Tagging Model
-
-**A transaction has exactly one tag or a set of splits that cover 100% of its amount. Nothing else.**
-
-This is the foundational constraint of the tagging system. It eliminates ambiguity in budget attribution, reports, and goal tracking. Every unit of money in the ledger is attributed to exactly one tag at any point in time.
-
-- Single-tagged transactions: the full amount counts against that tag in the budget engine and reports
-- Split transactions: each split's amount counts against its respective tag — splits are independent budget units
-- Untagged transactions: excluded from all budget and report calculations until tagged
-
-There is no primary/secondary tag concept. There are no secondary tags without amounts. The `transaction_tags` join table does not exist in the schema. Tag assignment is either a `tag_id` on the transaction row (single tag) or rows in `transaction_splits` (split case).
-
-#### F4.3 Tag Management Screen
-
-Accessible from the left sidebar "More → Tags" or by clicking any tag label.
-
-Views:
-
-- **Tree view:** hierarchical display with drag-and-drop reordering and reparenting; inline rename; color/icon picker
-- **Table view:** flat list with columns for name, parent, transaction count, last used, monthly target; sortable; bulk actions
-
-Actions: create, rename, recolor, merge into another tag (all transactions retag automatically), delete (with reassignment prompt for existing transactions), archive.
-
-#### F4.4 OOTB Tag Starter Stack
-
-On first launch after import, the system offers an opinionated default tag tree as a starting point. User can accept all, selectively accept, or skip.
-
-**The starter stack is i18n — localized per the user's selected locale.** When the user chooses Hebrew on the locale selection screen, all tag names are pre-populated in Hebrew. When English, in English. The tree structure is identical across locales; only the names differ. This removes the friction of renaming a foreign-language tag tree on first use.
-
-**Hebrew locale (עברית):**
-
-```
-הכנסות
-  משכורת
-  הכנסות נדל"ן
-  תשואות השקעות
-  פרילנס
-
-דיור
-  שכירות / משכנתא
-  ניקיון
-  ועד בית
-  ארנונה
-  תחזוקה ותיקונים
-
-מזון
-  סופרמרקט
-  מסעדות ובתי קפה
-  קפה
-
-תחבורה
-  דלק
-  תחבורה ציבורית
-  חנייה
-  תחזוקת רכב
-
-ילדים
-  גן / צהרון
-  חינוך
-  חוגים
-  ביגוד
-  מתנות וצעצועים
-
-בריאות
-  רופאים
-  בית מרקחת
-  ביטוח בריאות
-
-פיננסי
-  מיסים
-  עמלות בנק
-  החזרי הלוואות
-  ביטוח
-
-אישי
-  ביגוד
-  בידור
-  נסיעות
-  מנויים
-  מתנות
-
-חסכונות
-  קרן חירום
-  חסכון לטווח קצר
-
-יעדים                    ← ריק; מתמלא כאשר יוצרים יעדים
-```
-
-**English locale:**
-
-```
-Income
-  Salary
-  Real Estate Income
-  Investment Returns
-  Freelance
-
-Housing
-  Rent (Or Mortgage)
-  Cleaning
-  HOA
-  Municipal Tax (Arnona)
-  Maintenance & Repairs
-
-Food
-  Groceries
-  Restaurants & Cafés
-  Coffee
-
-Transportation
-  Fuel
-  Public Transit
-  Parking
-  Car Maintenance
-
-Kids
-  Daycare / Gan
-  Education
-  Activities
-  Clothing
-  Gifts & Toys
-
-Healthcare
-  Doctors
-  Pharmacy
-  Health Insurance
-
-Financial
-  Taxes
-  Bank Fees
-  Loan Payments
-  Insurance
-
-Personal
-  Clothing
-  Entertainment
-  Travel
-  Subscriptions
-  Gifts
-
-Savings
-  Emergency Fund
-  Short-term Savings
-
-Goals                    ← empty; populated as goals are created
-```
-
-Additional locales (US English, etc.) follow the same pattern with market-appropriate tag names (e.g. "HOA" vs "Arnona"). Adding a new locale requires only a new translation file — no structural changes.
-
-#### F4.5 Tag Detail View
-
-Clicking any tag anywhere in the app navigates to the tag detail screen — a first-class view, not a modal or sidebar panel. Accessible at `/tags/[id]`.
-
-**View toolbar (left slot):** Breadcrumb showing the full hierarchy path from root to current tag. Each ancestor is a clickable link to its own tag detail view. The current tag is the rightmost, non-linked item. Only the leaf segment of each tag's name is shown (no path duplication). Example: `Tags / Credit Cards / Hadar`.
-
-**View toolbar (right slot):** Horizon Selector — drives all data on the page. Topbar title is intentionally empty (breadcrumb IS the identity).
-
-**KPI row (4 cards):**
-- **Total Cashflow** — net (income − expense) for this tag and all descendants in the selected horizon. Green if positive, red if negative.
-- **Expenses** — total expense for this tag subtree, with percentage share of all spending.
-- **Income** — total income for this tag subtree.
-- **Active Periods** — number of weeks/months/years (whichever is selected for the chart) that had any activity.
-
-**Cashflow Over Time chart:** Bar chart groupable by Week / Month / Year. Shows income (green) and expense (red) bars per bucket. Y-axis auto-scales to actual values (no forced "k" suffix for small amounts).
-
-**Transaction list:** All transactions tagged with this tag **or any descendant tag at any depth**, filtered to the selected horizon. Reuses the shared TransactionList component. Date filter is reactive — changes to the Horizon Selector immediately update the list with no page reload.
-
-**Parent tag aggregation:** A parent tag (e.g. "Credit Cards") aggregates all descendant transactions (e.g. "Credit Cards / Hadar", "Credit Cards / Nisan") across all views — stats, chart, and transaction list. Implemented via recursive CTE at the DB layer.
-
-#### F4.6 Tag Tree Transformation
-
-Two distinct tools for restructuring the tag taxonomy.
-
-**Refactoring Tools (ongoing — accessible from More → Tags):**
-
-_Merge:_ Combine two tags into one. All transactions tagged to the source tag are retagged to the target tag. Budget configuration from the source is discarded (user is prompted to review the target's budget). The source tag is deleted after merge. Merge preview shows a count of affected transactions before committing.
-
-_Reparent:_ Move a tag to a different parent in the tree. All transactions retain their tag assignments — the tag simply moves in the hierarchy. Child tags move with it. Budget targets are unaffected.
-
-_Split:_ Divide one tag into two or more new tags. Because splitting requires deciding which transactions go to which new tag, this opens a transaction review UI: the user assigns each transaction in the source tag to one of the new tags (with AI suggestion based on description). When complete, the source tag is deleted.
-
-_Bulk Retag:_ Select multiple transactions (from any view) and change their primary tag in one action. Secondary tags are unaffected. Confirmation shows count before committing.
-
-_Rename:_ Inline, always available. Affects display name only — all references update automatically.
-
-**Migration Tool (one-time — accessible from Settings → Import → Tag Tree Migration):**
-
-For users arriving from Buxfer, YNAB, or Actual Budget with an existing tag/category structure. The migration tool:
-
-1. Parses the imported tag tree from the source export
-2. Displays a side-by-side mapping UI: source tags on the left, Goaldy's current tag tree on the right
-3. User maps each source tag to a Goaldy tag (create new, map to existing, or ignore)
-4. System previews the transaction count affected by each mapping
-5. User confirms — all historical transactions are retagged atomically
-6. A migration log is saved showing what was changed (reversible within 24 hours via an undo snapshot)
-
-The migration tool is also used when a user wants to wholesale restructure their existing Goaldy tag tree — e.g., consolidating tags after a year of organic growth into a cleaner taxonomy.
-
----
-
-### F5 — Categorization Engine
-
-#### F5.1 Rules Engine
-
-Structured categorization rules evaluated on every imported transaction before AI categorization. Rules run in priority order.
-
-**Rule structure:**
-
-- Target tag (the tag to assign if matched)
-- Match mode: ALL conditions must match, or ANY condition must match
-- Conditions: one or more field-operator-value triples
-
-**Supported fields:** description, merchant, amount, account
-
-**Supported operators:**
-
-- Text fields: contains, equals, starts_with, ends_with, matches_regex
-- Amount fields: greater_than, less_than, between, equals
-
-**Example rule:**
-
-```
-IF description contains "סופרסל" OR description contains "רמי לוי"
-THEN tag as Food / Groceries
-```
-
-Rules are created from three entry points:
-
-1. "Add Rule" action on any transaction — pre-fills fields from transaction data
-2. Rules management screen (More → Rules) — create from scratch
-3. AI suggestion confirmation — confirming an AI suggestion can auto-create a rule
-
-#### F5.2 Self-Cleansing Rules
-
-Rules track `match_count` and `last_matched_at`. The Rules screen surfaces staleness signals:
-
-- **Never matched** (match_count = 0, created >30 days ago) → "This rule has never matched — delete it?"
-- **Stale** (last_matched_at > 90 days ago) → "This rule hasn't matched in 3 months — still relevant?"
-- **Single match** (match_count = 1) → "This rule matched only once — consolidate with another?"
-
-These are surfaced as inline flags on the rule row, not blocking notifications. User dismisses or acts.
-
-#### F5.3 AI Categorization
-
-Transactions not matched by any rule are batched and sent to Claude for categorization. The prompt includes the user's tag tree and a few-shot set of their confirmed transactions as examples. Claude returns a tag assignment and confidence score per transaction.
-
-Transactions with confidence ≥ 0.7 are auto-assigned and appear in the "AI-tagged" state. Transactions with confidence < 0.7 surface in the triage queue for user review.
-
-**Category source tracking:** every transaction carries a `category_source` field — `rule`, `ai`, `user`, `inherited`, or `untagged`. Visible in the transaction detail panel. The triage health metric uses this to compute the auto-tagged percentage.
-
-#### F5.4 Triage Queue
-
-The triage queue is the untagged or low-confidence-AI-tagged transaction list, accessible via the triage banner.
-
-**Triage view:** shows transactions one at a time (or in a compact list). For each transaction: description, merchant, amount, date, account, and the AI's top 3 tag suggestions with confidence scores.
-
-User actions per transaction: accept top suggestion (→ creates rule prompt), choose different suggestion, type custom tag, mark as transfer (removes from categorization need), skip for later.
-
----
+**Fire on:** import, manual entry, editing
 
 ### F6 — Dashboards
 
-The Dashboard screen has a horizontal tab selector at the top. Tabs are fixed (OOTB) and user-orderable. Custom dashboard creation is a Phase 2 feature.
+**Expense Dashboard:**
 
-#### F6.1 Expense Dashboard
+- Pie chart: top tags by amount (last 30 days)
+- Sparkline per tag: spending trend (last 90 days)
+- Total monthly expense (current + last 3 months for trend)
+- Top merchants (by frequency, by amount)
 
-**KPI strip:** Total expense this period · vs last period (delta + %) · Average / month (12m)
+**Income Dashboard:**
 
-**Main chart:** Donut chart showing expense breakdown by top-level tags. Clicking any segment drills into that tag's detail view.
+- Total income (current month + trend)
+- Income by source (tag breakdown)
+- Income vs expense (waterfall or simple comparison)
 
-**Tag breakdown table:** Tag / Amount / % of total / vs last period — sorted by amount descending. Expandable rows for child tags.
+**Net Worth Dashboard:**
 
-**Top Movers panel:** Tags with the largest absolute change vs previous period. Shows tag name, this period, last period, delta. Red if up, green if down (for expenses).
+- Current net worth (assets - liabilities)
+- Trend (last 12 months, calculated from account snapshots)
+- Breakdown by account type (liquid, investments, real estate, loans)
+- Drill down to account detail
 
-**Timeline panel:** Spending curve within the current period (day-by-day running total vs same period last month).
+**All dashboards:**
 
-**Trend chart:** 12-month bar chart of total expense per month.
+- Date range picker (last 30 days, 90 days, YTD, custom)
+- Filterable by tag, account, label
+- Export as CSV or PNG
 
-#### F6.2 Income Dashboard
+### F7 — Import
 
-Same structure as Expense dashboard but for income transactions. Income tags are those marked `is_income = true`.
+**Supported formats:**
 
-**Additional KPI:** Savings rate (income minus expenses, as % of income) — displayed prominently as a single large number with 12-month trend sparkline.
+- CSV (Buxfer, Israeli banks, generic via column mapping)
+- OFX (standard financial format)
+- Goaldy native (JSON, for API ingest)
 
-#### F6.3 Net Worth Dashboard
+**Import flow:**
 
-**KPI strip:** Total Net Worth · Liquid Net Worth (liquid + semi-liquid accounts only) · Change this month · Change YTD
+1. Pick file → auto-detect format
+2. If CSV: interactive column mapping (saved per bank)
+3. Preview first 10 rows
+4. Dedup check: show how many are new vs duplicates
+5. Run rules engine: show proposed auto-tags for untagged transactions
+6. Run transfer detection: flag likely internal transfers
+7. User confirms → write all to SQLite
 
-**Liquidity decomposition pills (Goaldy-specific):**
+**Dedup:**
 
-```
-Liquid ₪X  |  Semi-liquid ₪X  |  Illiquid ₪X  |  Locked ₪X  |  Debt −₪X
-```
+- Transactions hashed by: date + amount + description + account_id
+- Re-importing same file = zero duplicates
+- Overlapping imports handled gracefully
 
-Each pill is clickable and filters the account list below to that liquidity class.
+### F8 — Settings
 
-**Net Worth trend:** Line chart showing total net worth over time (month-end snapshots). Optional toggle to overlay individual account group contributions as stacked area.
+**General:**
 
-**Account group breakdown:** Table showing each liquidity class, total value, change this month, change YTD. Expandable to show individual accounts.
+- App name / logo (for white-label if self-hosting multiple instances)
+- Display currency (ILS default, affects all conversions + reporting)
+- Date format (DD/MM/YYYY vs MM/DD/YYYY)
+- Language (English, Hebrew)
 
-#### F6.4 Cashflow Dashboard
+**Data:**
 
-**KPI strip:** Net cashflow this period · Income · Expenses · Projected remaining this month
+- Export database (download SQLite file for backup)
+- Export transactions (CSV of all transactions)
+- Reset app (delete everything, confirm 3x)
 
-**Cashflow bar chart:** Income vs Expense per month for the last 12 months. Side-by-side bars, net cashflow line overlaid.
+**Rules:**
 
-**30-day cashflow timeline:** Day-by-day projection combining actual transactions (to date) with forecast transactions (remainder of month). Shows running balance trajectory. Tight months (projected net negative) are highlighted with an amber band.
+- Add, edit, delete, reorder, test
 
-**Largest upcoming items:** List of the top 5 projected expenses in the next 30 days by amount, sourced from the forecast engine.
+**Integrations:**
 
-#### F6.5 Budgets Dashboard Tab
-
-Summary view linking to the full Budgets screen. Designed as a quick-check surface, not the primary budget management interface.
-
-**Free Cashflow** — the headline number: budgeted income minus budgeted expenses. Displayed large at the top.
-
-**Budget status summary:** Progress bars for the top 5 expense tag groups. Green if under target, amber if >80% of budget used, red if over. Each bar links to the full Budgets screen at that tag.
-
-**Goals allocation summary:** How much of free cashflow is allocated to active goals. Links to Goals screen.
-
----
-
-### F7 — Budgets
-
-Budgets is a first-class nav item. It is the monthly financial planning surface — where you set spend targets per tag, review income, and see the resulting free cashflow that feeds the Goals system.
-
-#### F7.1 Budget Screen Layout
-
-**Period navigator:** Month selector with prev/next arrows. Defaults to current month.
-
-**EXPENSE | INCOME tabs** — toggles the budget table between expense tags and income tags.
-
-**KPI strip (Expense tab):**
-
-- Budgeted: sum of all expense tag monthly targets
-- Actual Expense: sum of actual transactions in period
-- Available: Budgeted minus Actual (green if positive, red if negative)
-
-**KPI strip (Income tab):**
-
-- Budgeted: sum of all income tag monthly targets
-- Actual Income: sum of actual income transactions
-- Rollover: income carried from prior month (optional, if rollover enabled)
-- Available: total available to allocate
-
-**Free Cashflow pill** — always visible regardless of active tab: `Free Cashflow: ₪X,XXX` — income budget minus expense budget. Links to Goals screen.
-
-#### F7.2 Budget Table
-
-Columns: TAG / BUDGETED / ACTUAL / SCHEDULED / AVAILABLE
-
-**Tag column:** Hierarchical display matching the tag tree. Parent rows show aggregate of children. Parent rows are expandable/collapsible. Indented child rows shown when expanded.
-
-**Budgeted column:** The monthly target for this tag. Editable inline — click to open the edit panel (see F7.3).
-
-**Actual column:** Sum of actual transactions in the period tagged to this tag. Clicking navigates to filtered transaction list for that tag in this period.
-
-**Scheduled column:** Sum of projected recurring transactions for this tag in the period. Auto-populated from:
-
-- User-configured repeat schedules
-- System-detected recurring patterns (3+ months of consistent pattern) Shown in a muted style to distinguish from actuals. A small "i" icon opens a popover explaining which transactions contribute.
-
-**Available column:** Budgeted minus Actual. Green if positive (room remaining), red if negative (over budget). Parent rows aggregate child availables.
-
-**Row actions:**
-
-- `+` on parent row → add child tag to budget
-- Edit icon on any row → opens budget edit panel
-- The row itself is clickable → navigates to tag detail view
-
-#### F7.3 Budget Edit Panel
-
-Slide-in panel (not a blocking modal) when editing a budget line. This panel edits the **budget configuration on the tag itself** — budget is a tag property, not a separate record.
-
-**Fields:**
-
-|Field|Type|Notes|
-|---|---|---|
-|Tag|Read-only display|Shows full path: Housing / Rent (Or Mortgage)|
-|Budget type|EXPENSE or INCOME|Determines which tab it appears on. Defaults to the dominant cash flow direction of the tag's transactions. Overridable.|
-|Budgeted amount|Number|The target per repeat period|
-|Repeat period|Select|**Weekly / Biweekly / Monthly / Quarterly / Annually / Custom**|
-|Custom interval|Number + unit|e.g. "every 6 weeks" — shown only when Custom selected|
-|Start date|Date|When this budget configuration takes effect|
-|Enable rollover|Checkbox|Unused budget from previous period carries forward|
-|Repeat until|Date (optional)|For time-bounded budgets — leave blank for ongoing|
-|Account scope|Account selector (optional)|Restrict this budget to transactions from one account only|
-
-**Supported repeat periods in full:**
-
-- Weekly — for weekly allowances, grocery runs
-- Biweekly — paycheck-aligned budgets
-- Monthly — the standard; most tags use this
-- Quarterly — insurance premiums, quarterly taxes, HOA in some buildings
-- Annually — Arnona (lump sum), car licensing, annual subscriptions
-- Custom — any interval the user specifies
-
-When a non-monthly period is selected, the Budget table adapts: the Budgeted column shows the per-period amount with the period label ("₪550 / quarter"), and the Available column prorates correctly based on how far into the current period the user is.
-
-**Inline spending history** — always visible below the form fields:
-
-- Average actual spend: 3 periods / 6 periods / 12 periods (normalized to the selected repeat period)
-- Trend sparkline: 12 periods of actuals as a small bar chart
-- "Your 12-month average is ₪X — set this as your budget?" one-tap suggestion
-
-This is the primary onboarding mechanism for budget setup. Users see real spending history while entering a target — no separate wizard, no blank-form anxiety.
-
-#### F7.4 Not Budgeted Section
-
-Below the main budget table, a "Not Budgeted" section shows tags that have transactions in the period but no budget target set. Columns match the main table (actual, scheduled) but the budgeted column shows a "— Set target →" prompt.
-
-This surface prompts gradual budget completion over time without forcing upfront setup. First month of use: many rows here. Six months in: this section is empty or near-empty.
-
-#### F7.5 Empty State and First Use
-
-On first access, the budget table is empty. The empty state shows:
-
-1. A brief explanation of what budgets are for in Goaldy (spend targets, not methodology)
-2. "Set up budgets from your history" button — analyzes last 3 months of tagged transactions and populates the Not Budgeted section with average actuals as suggested targets
-3. User reviews each suggested target, clicks to accept or adjust, and the row moves to the main table
-
-This is more effective than a wizard because the user can move at their own pace, see real data immediately, and skip tags they don't want to budget.
-
----
-
-### F8 — Plan
-
-> **Note:** The old Goals feature (F8 v1.11 and earlier — Type A Future Expense, Type B Wealth Accumulation, Type C Debt Payoff) is **deprecated** and replaced by this Plan feature. The old DB table (`goals`) and tRPC router (`goals`) have been removed. All forward planning now uses the Plan pillars documented here.
-
-The Plan feature is the primary differentiator of Goaldy — it shifts the app from financial accounting to financial intention. It operates across three independent but interconnected pillars, each with its own tab on the `/plan` route.
-
-#### F8.1 Goals & Events Tab
-
-**Purpose:** Model every known future financial event in a 37-year projection, compute whether current savings can fund them all, and provide what-if controls to test different scenarios.
-
-##### F8.1.1 Plan Item Model
-
-Every plan item is either a **GOAL** or an **EVENT**, unified in the `plan_items` table.
-
-| Field | Description |
-|---|---|
-| `tier` | `GOAL` or `EVENT` |
-| `name` | Display name |
-| `icon` | Emoji |
-| `trigger_type` | How the year is determined: `YEAR` (explicit calendar year), `AGE` (age of a family member), `RECURRING` (repeating interval) |
-| `trigger_year` | Used with `YEAR` trigger |
-| `trigger_age` | Used with `AGE` trigger — e.g. "child's Bar Mitzvah at age 13" |
-| `member_id` | Family member whose age is used (for `AGE` trigger) |
-| `recurrence_years` | Interval for `RECURRING` items (e.g. car replacement every 7 years) |
-| `recurrence_end_year` | Last year recurring item fires |
-| `amount` | Nominal cost |
-| `duration_years` | Spread cost over N years (default 1) |
-| `saved_amount` | Amount already set aside (reduces required savings) |
-| `is_system` | True for auto-generated items (e.g. emergency fund top-up) — cannot be toggled by user |
-| `tag_id` | Auto-linked tag (`Goals/{name}` or `Events/{name}`) |
-| `is_active` | Soft delete / pause — excluded from projection when false |
-
-**Distinction between GOAL and EVENT:**
-- **GOAL** — the user is actively saving toward this item. `saved_amount` tracks progress. Progress bar shown. If `saved_amount >= amount`, the goal is fully funded and excluded from the projection.
-- **EVENT** — a known future cost that will be funded at the time (not saved in advance). Inflation-adjusted in the projection.
-
-##### F8.1.2 Projection Engine
-
-The projection runs entirely in the browser (no server round-trip for what-if changes). Engine lives in `packages/schema/plan-engine.ts` (pure TypeScript, no DB imports).
-
-**Algorithm (37 years, `startYear` to `startYear + 36`):**
-
-```
-For each year Y from startYear to startYear + 36:
-  opening_balance = previous closing balance (or startingCapital)
-  investment_return = opening_balance × weightedReturn
-  savings_contribution = monthlySavings × 12
-  draws = sum of all plan items that fire in year Y:
-    - GOALs: max(0, amount - saved_amount)    ← no inflation applied
-    - EVENTs: amount × (1 + inflationRate)^yearsOut  ← inflation-adjusted
-    - RECURRING items fire every N years
-    - AGE items fire when the member reaches trigger_age
-  closing_balance = opening_balance + investment_return + savings_contribution - draws
-```
-
-**Output fields:** `years[]` (per-year data), `isSolvent`, `firstDangerYear`, `lowestBalance`, `lowestBalanceYear`, `finalBalance`, `requiredMonthlySavings`.
-
-`requiredMonthlySavings` is found via binary search (40 iterations, accuracy ±₪100): the minimum monthly savings to keep all 37 year-end balances ≥ 0.
-
-##### F8.1.3 KPI Cards (Goals & Events tab)
-
-| Card | Value | Sub-text |
-|---|---|---|
-| Barrel Balance | Sum of investment layer account balances | N linked accounts |
-| Available for Savings | Income − Expenses (12-month trailing) | Shows component amounts |
-| Required Monthly | Binary-search result from projection engine | Shows gap or surplus vs current setting |
-| Plan Status | "Fully Funded" or "Gap Detected" | Lowest balance year or first danger year |
-
-"Barrel Balance" is the user-facing label for the investment layer starting capital.
-
-##### F8.1.4 Projection Chart
-
-37-year area chart (Recharts AreaChart, `type="linear"` for sharp drops at event years). Two fill areas: indigo for positive balance, red for negative (below zero). Reference line at y=0 (dashed red). No legend. Custom tooltip shows: year, family member ages, opening/savings/return/draws/closing cashflow table, per-item draws breakdown.
-
-##### F8.1.5 Projection Controls
-
-Below the chart, 4-column grid:
-1. **Monthly Savings slider** — range ₪1,000–₪40,000 step ₪500. Real-time chart update.
-2. **Starting Capital override** — number input; defaults to actual investment account sum; "↩ Reset" button when overridden.
-3. **Inflation Rate** — segmented buttons: 1.5% / 2.0% / 2.5% / 3.0% / 4.0%. Default 3.0%.
-4. **Return Rates** — per-account return rate inputs; blended weighted average displayed.
-
-##### F8.1.6 Goals Table
-
-Collapsible table of GOAL-tier items. Columns: GOAL (icon + name + SYSTEM badge), SAVED, TARGET, PROGRESS (mini bar), DEADLINE, STATUS, ACTIVE toggle. System items shown in teal, toggle disabled.
-
-When a GOAL is created, a tag `Goals/{name}` is auto-generated (same pattern as the deprecated F8 v1.11 auto-tag).
-
-##### F8.1.7 Events Table
-
-Collapsible table of EVENT-tier items. Columns: EVENT, TRIGGER (human-readable: "Age 13 · Lior", "Every 7 years", "Year 2031"), COST TODAY, LINKED TO (member name or "Family"), ACTIVE toggle.
-
-When an EVENT is created, a tag `Events/{name}` is auto-generated.
-
-##### F8.1.8 Item Templates
-
-10 pre-seeded Israeli life event templates. Inserted idempotently on first `/plan` load via `plan.seedTemplates` mutation.
-
-| Template | Tier | Trigger | Amount hint |
-|---|---|---|---|
-| Bar/Bat Mitzvah | GOAL | AGE 13 (child) | ₪40,000 |
-| Teen Living Costs | EVENT | AGE 18 (child) | ₪2,000/yr × 4 |
-| University | GOAL | AGE 18 (child) | ₪100,000 |
-| Living Support | EVENT | AGE 22 (child) | ₪1,500/yr × 3 |
-| Wedding | GOAL | YEAR | ₪120,000 |
-| Apartment Purchase | GOAL | YEAR | ₪500,000 |
-| Car Replacement | EVENT | RECURRING 7y | ₪80,000 |
-| Family Vacation | EVENT | RECURRING 3y | ₪20,000 |
-| Renovation | EVENT | RECURRING 10y | ₪60,000 |
-| Parent Support | EVENT | RECURRING 1y | ₪12,000 |
-
-##### F8.1.9 System Goal — Emergency Fund Top-Up
-
-When the Emergency Savings pillar is active and there is a gap (current balance < target), a system plan item is auto-generated in memory (not stored in DB) and injected into the item list on the client:
-
-- Name: "Emergency Fund Top-Up"
-- Tier: GOAL
-- Amount: gap amount
-- Saved: current emergency balance
-- `is_system: true` — cannot be deactivated by user
-- Appears in Goals table with teal background and "SYSTEM" badge
-- Included in the 37-year projection
-
----
-
-#### F8.2 Emergency Savings Tab
-
-**Purpose:** Track whether the user's liquid emergency reserve covers a target number of months of expenses.
-
-##### F8.2.1 Emergency Pillar Settings
-
-| Setting | Default | Description |
-|---|---|---|
-| `emergency_pillar_active` | Off | Toggle. When off, no system goal is generated and coverage is not enforced |
-| `emergency_target_months` | 6 | Coverage target in months. Options: 1, 2, 3, 4, 6, 9, 12 |
-
-##### F8.2.2 Coverage Calculation
-
-- **Emergency layer accounts**: user-assigned accounts with `layer = 'emergency'` in `plan_account_layers`
-- **Current balance**: sum of linked emergency account balances
-- **Monthly expenses**: 12-month trailing average from `transactions` table (expenses only, excluding transfers and income)
-- **Coverage months**: `current_balance / avg_monthly_expenses`
-- **Target amount**: `emergency_target_months × avg_monthly_expenses`
-- **Gap**: `max(0, target_amount - current_balance)`
-
-##### F8.2.3 Status States
-
-| Status | Condition | Color |
-|---|---|---|
-| OK | Coverage ≥ target months | Green |
-| WARNING | Coverage ≥ 50% of target | Amber |
-| CRITICAL | Coverage < 50% of target | Red |
-
-##### F8.2.4 KPI Cards (Emergency tab)
-
-Fund Balance · Coverage (N months) · Monthly Expenses (trailing avg) · Gap to Target
-
-##### F8.2.5 Coverage Progress Bar
-
-Visual bar from 0 to target months. Color matches status (green/amber/red). Updates immediately on changing the target-months selection.
-
-When a gap exists, a notice confirms: "System goal 'Emergency Fund Top-Up' (₪X) added to Goals & Events and Horizon projection."
-
----
-
-#### F8.3 Retirement Tab
-
-**Phase 1 — Accumulation tracking only.** Drawdown modeling, National Insurance income, and survivor benefits are deferred to Phase 2.
-
-**Purpose:** Project each retirement account's balance from now to retirement age and show the aggregate picture.
-
-##### F8.3.1 Retirement Layer Accounts
-
-User assigns accounts with `layer = 'retirement'` in `plan_account_layers`. Each linked account has:
-- `target_return_rate` — assumed annual return (e.g. 5%)
-- `monthly_contribution` — regular monthly deposit (e.g. employer + employee pension contribution)
-
-##### F8.3.2 Projection
-
-For each retirement account, per-year balance:
-```
-balance_Y = balance_{Y-1} × (1 + target_return_rate) + monthly_contribution × 12
-```
-
-Years remaining = `retirement_age - (current_year - birth_year_of_self_member)`.
-If `birth_year` is unknown, defaults to 30 years remaining.
-
-##### F8.3.3 Retirement Settings
-
-- `retirement_age`: from `plan_settings`. Default: 67.
-- `selfBirthYear`: from the `plan_members` row where `role = 'self'`.
-
-##### F8.3.4 KPI Cards (Retirement tab)
-
-Current Balance · Projected at Retirement (at age N, year Y) · Years Remaining · Monthly Contributions (combined)
-
-##### F8.3.5 Accumulation Chart
-
-Recharts AreaChart, `type="monotone"`. Shows aggregate balance from today to retirement age. Y-axis formatted as ₪K / ₪M abbreviations.
-
-##### F8.3.6 Account Detail Table
-
-Per-account breakdown: ACCOUNT, CURRENT, MONTHLY CONTRIB., RETURN %, PROJECTED AT RETIREMENT.
-
----
-
-#### F8.4 Family Members
-
-The projection engine uses family members to resolve `AGE`-triggered plan items. Members are stored in `plan_members`.
-
-| Field | Description |
-|---|---|
-| `name` | Display name |
-| `role` | `self`, `partner`, `child`, `parent`, `other` |
-| `birth_year` | Used to compute age in any given year |
-
-The member with `role = 'self'` provides the birth year for retirement calculations.
-
----
-
-#### F8.5 Plan Settings (Singleton)
-
-Stored as a single row in `plan_settings` with `id = 'default'`. Auto-created on first `/plan` load.
-
-| Setting | Default | Description |
-|---|---|---|
-| `monthly_savings` | 0 | Starting value for the savings slider |
-| `inflation_rate` | 0.03 | Default 3% (Israeli inflation assumption) |
-| `return_rate_override` | null | If set, overrides per-account weighted return |
-| `horizon_years` | 37 | 37 years = CY through CY+36 (37 data points) |
-| `start_year` | current year | First year of projection |
-| `emergency_pillar_active` | false | See F8.2 |
-| `emergency_target_months` | 6 | See F8.2 |
-| `retirement_age` | 67 | See F8.3 |
-
----
-
-#### F8.6 Linked Accounts (Plan Account Layers)
-
-Accounts are linked to pillars via `plan_account_layers`. Each account can only be in one layer (unique constraint on `account_id`).
-
-| Layer | Usage |
-|---|---|
-| `investment` | Starting capital + return modeling for 37-year projection (Goals & Events tab) |
-| `emergency` | Balance counted toward emergency coverage (Emergency tab) |
-| `retirement` | Balance + contributions projected to retirement (Retirement tab) |
-
----
-
-#### F8.7 Non-Goals (Plan Feature)
-
-- The old Goals feature (savings/debt-payoff/purchase/retirement goal types from PRD v1.11) is removed. There is no migration path — it was pre-launch.
-- Drawdown modeling in retirement (Phase 2)
-- Monte Carlo simulation (not planned)
-- Mortgage/debt payoff modeling (future separate feature)
-- Auto-import of contribution amounts from transactions (Phase 2)
-
----
-
-### F9 — Intelligence Feed
-
-A dedicated screen presenting a daily financial briefing. Not a notification list, not a chatbot. Each card is a self-contained insight with observation, context, and options.
-
-#### F9.1 Card Types
-
-**Anomaly alert (red):** Spending spike in a tag vs the user's own historical baseline.
-
-```
-Household Items up 280% vs your 6-month average
-₪3,200 this month vs typical ₪850.
-Three transactions: IKEA (₪1,800), Ace Hardware (₪1,100), unnamed (₪300).
-[Tag as one-time]  [See transactions]  [Set new baseline]
-```
-
-**Cashflow forecast (amber):** Upcoming 30-day cash pressure with specific scheduled outflows.
-
-```
-Next 30 days: tighter than usual
-Projected outflows ₪29,400 vs projected income ₪28,100. Net: -₪1,300.
-Three large items: Mortgage (₪6,300 on 10th), HOA (₪550 on 15th),
-Insurance (₪1,800 on 22nd).
-Your savings buffer covers this comfortably.
-[See cashflow timeline]
-```
-
-**Goal signal (green):** Goal on track, drifting, or ahead of schedule.
-
-```
-Vacation 2026 — drifting
-You've contributed ₪2,800 this month vs required ₪1,500.
-You're 3 months ahead. Consider reallocating ₪800/mo to Car Replacement.
-[Rebalance goals]  [Keep current pace]
-```
-
-**Israeli-specific (blue):** קרן השתלמות, pension milestones, mortgage rate signals.
-
-```
-קרן השתלמות — 14 months to vesting
-Projected value at vesting: ₪328,000 (tax-free withdrawal available).
-Consider your options: withdraw and invest, leave to compound,
-or use toward property purchase.
-[Model scenarios]
-```
-
-**Budget nudge (amber/orange):** Tag approaching or over budget with days remaining.
-
-```
-Kids/Daycare — ₪100 over budget with 28 days remaining
-₪5,100 vs ₪5,000 target. The month is only 2 days old.
-[Adjust budget]  [See transactions]  [It's a one-time charge]
-```
-
-**Lead gen opportunity (gold) — Phase 4 only:** Contextually matched financial product offer. Always the last card in the feed. Visually distinct styling makes clear this is an offer, not a system insight. Pro users see no lead gen cards.
-
-#### F9.2 Feed Management
-
-Cards are generated daily. User can:
-
-- Mark card as read (collapses)
-- Dismiss card (removes from feed, won't regenerate for 30 days)
-- Act on the card's primary action
-- Scroll past (card remains until explicitly dismissed or read)
-
-Feed is sorted by priority (system-assigned based on urgency). Anomalies and cashflow warnings appear before informational cards.
-
----
-
-### F10 — Reports
-
-Reports in Goaldy are primarily accessed via the **tag detail view** (F4.5) — clicking any tag from anywhere gives you its full report. The Reports nav item provides comparison and cross-tag analysis surfaces.
-
-#### F10.1 Tag Comparison Report
-
-Compare multiple tags over the same period. User selects 2–6 tags and a date range. Output: overlaid trend lines, side-by-side period breakdown, combined vs individual totals.
-
-Use case: "How does my Groceries spending compare to Restaurants over the last year?"
-
-#### F10.2 Income vs Expense Report
-
-12-month bar chart (income bars, expense bars, net cashflow line). Period selectable. All accounts or filtered to selected accounts. Exportable as PNG.
-
-#### F10.3 Net Worth Over Time Report
-
-Line chart of total net worth by month, with optional breakdown by account group (liquid, investment, locked, real estate, debt) as stacked area. Date range selectable from account history start.
-
-#### F10.4 Savings Rate Report
-
-Monthly savings rate (net cashflow as % of income) over time. 12-month trend line, 3-month and 12-month rolling averages. Benchmark line optional (user-set target savings rate).
-
-#### F10.5 Custom Date Ranges
-
-All reports support custom date ranges including: this month, last month, last 3 / 6 / 12 months, this year, last year, custom range, all time.
-
----
-
-### F11 — Internationalization and Multi-Currency
-
-#### F11.1 Supported Locales at MVP
-
-- English (LTR) — `en`
-- Hebrew (RTL) — `he`
-
-Locale is stored in user profile. No URL prefix. RTL layout switches automatically — all layout uses CSS logical properties (`padding-inline-start`, `margin-inline-end`) so direction switching requires no component changes.
-
-#### F11.2 Currency Formatting
-
-All amounts formatted via `Intl.NumberFormat` with explicit locale and currency. Never string-concatenated. The symbol position (left in USD, right in ILS) and number formatting (comma separators, decimal places) are locale-correct automatically.
-
-#### F11.3 Multi-Currency Accounts
-
-Each account has a base currency. Foreign-currency amounts are displayed in native currency on account lines and converted to display currency (ILS default) for aggregations. Conversion uses daily fetched rates with transparent source display.
-
-#### F11.4 Hebrew-Specific Handling
-
-Hebrew transaction descriptions from Israeli bank scrapers are preserved as-is regardless of UI locale. The rules engine matches Hebrew text. Claude categorizes Hebrew descriptions correctly without translation.
-
----
-
-### F12 — Israeli Financial Instruments
-
-#### F12.1 קרן השתלמות (Keren Hishtalmut)
-
-Account type: Investment, Locked liquidity class.
-
-Additional fields at account creation:
-
-- Start date (when contributions began)
-- Vesting date (6 years from start date — auto-calculated but editable)
-- Employer + employee monthly contribution amounts
-
-Intelligence feed card activates 24 months before vesting with countdown. At vesting, card presents three standard decision scenarios:
-
-1. Withdraw (tax-free) — shows net amount after any applicable deductions
-2. Leave to compound — shows projected value at user-defined future date
-3. Roll into pension — shows projected pension impact
-
-#### F12.2 Pension (פנסיה)
-
-Account type: Investment, Locked liquidity class. Snapshot-based balance.
-
-Additional fields: employer contribution %, employee contribution %, expected retirement age.
-
-Intelligence feed card tracks projected value at retirement age using a user-set assumed annual yield rate (same model as Type B goals).
-
-#### F12.3 Mortgage Refinancing Intelligence
-
-For accounts of type Loan with subtype Mortgage, Goaldy fetches the current Bank of Israel prime rate (public API, daily) and compares against the user's mortgage rate (entered at account creation).
-
-When the spread exceeds a configurable threshold (default: 0.5%), an intelligence feed card surfaces:
-
-```
-Mortgage refinancing opportunity
-Current rate: 3.2%  |  Your rate: 4.1%  |  Spread: 0.9%
-On your ₪850,000 balance, refinancing could save ₪637/month.
-[Find refinancing options →]  ← Phase 4 lead gen
-```
-
-In Phase 3, the card shows the opportunity without the lead gen link. In Phase 4, the link activates.
-
-#### F12.4 Arnona and Annual Israeli Expenses
-
-The rules engine ships with OOTB detection patterns for major annual Israeli expenses: Arnona (municipal tax), insurance renewals, vehicle licensing. These are flagged as "annual" in the intelligence feed so they don't skew monthly averages.
-
----
-
-### F13 — Settings and Integrations
-
-#### F13.1 Profile Settings
-
-Display currency, locale (en/he), name, email, timezone.
-
-#### F13.2 Integration Settings
-
-**API Keys:**
-
-- Create named API key (Moneyman, custom script, etc.)
-- Key shown once on creation
-- List of active keys with name, created date, last used date
-- Revoke individual keys
-
-**SimpleFIN:**
-
-- Paste access URL to connect US bank accounts
-- Shows last sync date, sync status, error state if applicable
-- Manual "Sync now" trigger
-
-**Google Drive:**
-
-- Drive connection status
-- Last sync timestamp
-- "Open goaldy.db in Drive" link
-- "Export goaldy.db" — download a copy of the raw SQLite file
-- "Disconnect Drive" — with clear warning about what this means
-
-#### F13.3 Data Management
-
-- Export all transactions as CSV (all accounts or filtered)
-- Export goaldy.db (raw SQLite — the complete financial database)
-- Import from Buxfer, Actual Budget, YNAB
-- Delete account — removes session and Postgres profile; `goaldy.db` in Drive is the user's own property and is not deleted by Goaldy
-
----
-
-### F14 — Landing Page
-
-#### F14.1 Purpose and Access Model
-
-The landing page is a **closed beta acquisition surface**. The primary CTA is "Request Early Access" — not immediate signup. Approved applicants receive an invitation email with a signup link. This controls rollout, ensures early users are genuinely motivated, and creates social proof through exclusivity.
-
-The page is public (no auth required). All app screens behind `/app/*` require authentication. The landing page lives at the root `/`.
-
-#### F14.2 Page Structure
-
-Modeled after Monarch's structural approach — a single long-form page with a clear narrative arc: hook → problem → solution → features → social proof → CTA. Monarch's copy is strong because it names the emotional benefit ("money clarity") before the features. Goaldy does the same.
-
----
-
-**Section 1 — Hero**
-
-Full-width, above the fold. No app screenshot (nothing to show in beta).
-
-**Headline:**
-
-> Your finances. Your data. Finally in one place.
-
-**Subheadline:**
-
-> Goaldy connects your Israeli and international accounts, tracks your spending, plans your future — and stores everything in your own Google Drive. Not ours.
-
-**CTA button:** `Request Early Access →` **Secondary link:** `Already have an invite? Sign in`
-
-**Social proof line (below CTA):**
-
-> Replacing Buxfer, Monarch, and spreadsheets — starting with Israel.
-
----
-
-**Section 2 — The Problem (implicit comparison)**
-
-Three-column cards. No competitor logos — just the pain points.
-
-|Card 1|Card 2|Card 3|
-|---|---|---|
-|**Your data lives on their servers**|**Built for one market**|**Feature bloat you never use**|
-|Most finance apps store your transaction history on their infrastructure. A breach is their problem — and yours.|Mint, YNAB, and Monarch are US-first. They don't know what a קרן השתלמות is.|Complex methodologies that require constant maintenance. You came here to understand your money, not do accounting homework.|
-
----
-
-**Section 3 — The Goaldy Difference**
-
-Three-column feature cards, icon + headline + short copy. On-brand gold accent on icons.
-
-**Card 1 — Your data in your Drive**
-
-> Every transaction, account, and balance lives in a single file in your Google Drive. Goaldy reads it. You own it. Export it, delete it, or keep it forever — we have no say.
-
-**Card 2 — Israeli and international, unified**
-
-> Hapoalim, Leumi, Max, Chase, Schwab, Fidelity — one dashboard. With native support for קרן השתלמות, pension, and mortgage intelligence that no international tool provides.
-
-**Card 3 — Intelligence without the methodology**
-
-> Goaldy tracks, categorises, and analyses your money without telling you how to manage it. No envelope budgeting, no rigid system. Just clear data and smart insights on your terms.
-
----
-
-**Section 4 — Features (tabbed or stacked)**
-
-Four feature highlights mirroring Monarch's "Track / Budget / Collaborate / Plan" structure but Goaldy-specific:
-
-**Know your net worth — really** All accounts — liquid, locked, illiquid, liabilities — decomposed by accessibility. See how much is actually available vs tied up in property or pension.
-
-**Budgets that flex to reality** Set spend targets per category, watch actuals track against them in real time, and let the system surface when something's drifting — without locking you into a methodology.
-
-**Plan future expenses before they surprise you** Name upcoming costs, set timelines, and Goaldy shows you whether your free cashflow can absorb them — individually and in combination. The mental math you do every few months, done automatically.
-
-**Categorise once, forget forever** A powerful rules engine learns how you categorise transactions. Claude AI handles the rest. After a few weeks, your inbox runs itself.
-
----
-
-**Section 5 — Pricing / Beta**
-
-Simple, one-line section. No pricing table.
-
-> **Free during beta.** No credit card. No commitment. We're building this in the open and early users shape what it becomes.
-
----
-
-**Section 6 — Final CTA**
-
-Repeat of the hero CTA with a supporting line.
-
-**Headline:** Ready to actually understand your finances? **CTA button:** `Request Early Access →` **Supporting copy:** Invite-only beta. No credit card required.
-
----
-
-**Section 7 — Footer**
-
-Minimal. Logo + "Goaldy © 2026" + links: Privacy Policy · Terms of Use · Contact
-
----
-
-#### F14.3 Early Access Request Form
-
-Clicking "Request Early Access" opens a modal (not a new page):
-
-**Fields:**
-
-- Email address (required)
-- "How do you currently manage your finances?" — short text (optional, qualifies intent)
-- "Do you have accounts in Israel, the US, or both?" — radio (Israel only / US only / Both)
-
-**Submission:** records the applicant in a `waitlist` table in Postgres (email, answers, timestamp, source). Sends an automated acknowledgement email from `noreply@goaldy.ai`.
-
-**Post-submission state:** modal updates to "You're on the list — we'll be in touch." No redirect.
-
-**Invitation flow (separate, admin-triggered):** an invitation email contains a unique one-time signup link. The link expires in 7 days. Clicking it initiates the Google OAuth flow.
-
----
-
-#### F14.4 Navigation Bar
-
-Minimal. Fixed top.
-
-**Left:** Goaldy logo (G mark + wordmark) **Right:** `Sign in` (text link) · `Request Access` (gold button)
-
-No other nav items on the landing page. No marketing sub-pages in MVP.
-
----
-
-#### F14.5 Design Language
-
-The landing page uses the Goaldy brand palette and the same Plus Jakarta Sans typeface as the app. Dark background option for the hero section (Midnight Indigo `#283593` or near-black) with Amber Gold `#F9A825` accents on CTAs, icon highlights, and section dividers. Body sections on Cool Grey `#F4F7F6`. This creates a premium feel consistent with the product positioning while differentiating from the app's white-surface UI.
-
----
-
-### F15 — Authentication and Onboarding
-
-#### F15.1 Auth Model
-
-**Google OAuth only.** No email/password. No magic links. No other SSO providers at MVP.
-
-Rationale: the app requires Google Drive access (`drive.appdata` scope) as a core architectural dependency. Requiring Google auth aligns the account identity with the storage provider and eliminates an entire class of credential management complexity. Users who do not have a Google account cannot use Goaldy in its current form — this is an accepted constraint.
-
-**Strict fallback policy:** Google account issues (suspension, loss of access) are the user's responsibility to resolve with Google. Goaldy provides no account recovery path. This is communicated clearly at signup.
-
-#### F15.2 OAuth Scopes Requested at Signup
-
-Both scopes are requested in a single combined consent flow at first sign-in. The user sees one Google consent screen, not two.
-
-|Scope|Purpose|
-|---|---|
-|`openid`|Identity|
-|`email`|User profile|
-|`profile`|Display name|
-|`https://www.googleapis.com/auth/drive.appdata`|Read/write `goaldy.db` in the user's Drive `appDataFolder`|
-
-The `drive.appdata` scope must be justified in the Google OAuth app registration with a clear description: "Goaldy stores your financial database as a single file in your Google Drive's private app folder. This file is only accessible to Goaldy and is not visible in your regular Drive interface."
-
-#### F15.3 First Login — New User Onboarding Flow
-
-When a user completes OAuth for the first time (no existing `users` record in Postgres):
-
-```
-Step 1 — Account created
-  Postgres user record created with email, name, locale default 'en'
-  Drive connection record created with access + refresh tokens
-
-Step 2 — Locale and currency selection
-  Single screen: "Choose your language" (English / עברית)
-  Display currency selector (ILS / USD / EUR — more can be added later)
-  [Continue →]
-
-Step 3 — Google Drive initialisation
-  System creates goaldy.db in Drive appDataFolder
-  Applies SQLite schema and inserts default meta row
-  "Your private financial file has been created in Google Drive.
-   Only you and Goaldy can access it."
-  [Continue →]
-
-Step 4 — Tag starter stack
-  "Start with a suggested category structure?"
-  Shows a preview of the localised OOTB tag tree (collapsed, first 5 tags visible)
-  [Use suggested tags]  [Start empty]  [I'll import from Buxfer/YNAB →]
-
-Step 5 — First import prompt
-  "How would you like to bring in your financial data?"
-  ○ Upload a CSV or OFX file
-  ○ Connect via REST API (for Moneyman users)
-  ○ I'll add data manually
-  [Skip for now]
-  
-  → Routes to the appropriate import flow or drops into the empty app
-```
-
-Onboarding is linear and cannot be skipped past Step 3 (Drive initialisation is required). Steps 4 and 5 can be skipped. The onboarding state is tracked in Postgres (`users.onboarding_completed_at`).
-
-#### F15.4 Returning User Login Flow
-
-```
-User clicks "Sign in" on landing page
-  → Google OAuth (accounts.google.com)
-  → Callback to /api/auth/callback/google
-  → NextAuth creates/validates session
-  → Drive token refreshed if within 7 days of expiry
-  → Redirect to /app/dashboard
-  → App loads: downloads goaldy.db from Drive → mounts in OPFS → renders
-```
-
-If the user has a valid session already (cookie present, not expired), `/app/*` renders directly without re-auth. The landing page `Sign in` button checks for an active session and redirects to `/app/dashboard` if found.
-
-#### F15.5 Invitation Link Flow
-
-```
-Admin sends invitation email containing:
-  https://app.goaldy.com/invite?token=<uuid>
-
-User clicks link:
-  → Token validated (exists in waitlist table, not expired, not used)
-  → Redirected to Google OAuth with invite_token in state param
-  → On OAuth callback: token marked used, user created, onboarding begins
-  → Expired or already-used tokens show a clear error with contact link
-```
-
-Invitation tokens expire after 7 days. One invitation = one account. Tokens are single-use.
-
----
-
-### F16 — Session Management
-
-#### F16.1 Session Policy
-
-**7-day hard expiry.** Sessions expire exactly 7 days after creation regardless of activity. No rolling/sliding window. The user is prompted to re-authenticate at the next app open after expiry.
-
-Rationale: financial data is sensitive. A found or shared device should not provide indefinite access. 7 days balances security with daily-use convenience.
-
-#### F16.2 Single Active Session
-
-**One active session per user at all times.** A new login on any device invalidates all previous sessions.
-
-Implementation: each session stores a `session_token` in Postgres. On every authenticated request, the token is validated against the current stored token. If a new login occurs, the stored token is replaced — all prior requests with the old token are rejected with a 401 and a clear message: "You've been signed in on another device. Please sign in again."
-
-This is consistent with the single-session architecture constraint from the data model (no concurrent writes to `goaldy.db`).
-
-#### F16.3 Session Storage
-
-Sessions are stored as HTTP-only, Secure, SameSite=Strict cookies. No session data in localStorage. The session cookie contains the NextAuth JWT which is validated server-side on every tRPC request.
-
-#### F16.4 Google OAuth Token Lifecycle
-
-Google refresh tokens are stored encrypted in `drive_connections`. Access tokens (valid for 1 hour) are refreshed automatically when within 5 minutes of expiry on any Drive operation.
-
-If the refresh token is revoked (user removed Goaldy from their Google account permissions), the next Drive operation fails with a Google auth error. The app detects this and:
-
-1. Invalidates the current session
-2. Shows a full-screen error: "Your Google Drive connection has been disconnected. Please sign in again to reconnect."
-3. Re-initiating OAuth re-requests the `drive.appdata` scope
-
-This is the **only forced re-auth trigger** beyond the 7-day expiry.
-
-#### F16.5 Sign Out
-
-Sign out invalidates the session cookie and deletes the session record from Postgres. The Drive connection record and `goaldy.db` in Drive are unaffected — the user's data remains intact. Redirect to the landing page after sign out.
-
----
-
-### F17 — Notification System
-
-#### F17.1 Architecture — NotificationService Abstraction
-
-All notifications are sent through a `NotificationService` interface. The MVP implementation is `EmailProvider` (Resend). Future implementations (WhatsApp via Twilio, Telegram via Bot API) are drop-in additions.
-
-```typescript
-// packages/notifications/index.ts
-
-interface Notification {
-  userId: string;
-  event: NotificationEvent;
-  data: Record<string, unknown>;  // event-specific payload, never raw financial data
-}
-
-interface NotificationProvider {
-  send(notification: Notification): Promise<void>;
-}
-
-class NotificationService {
-  constructor(private providers: NotificationProvider[]) {}
-
-  async notify(notification: Notification): Promise<void> {
-    const prefs = await getUserNotificationPrefs(notification.userId);
-    const enabledProviders = this.providers.filter(
-      p => prefs.enabledChannels.includes(p.channel)
-    );
-    await Promise.allSettled(enabledProviders.map(p => p.send(notification)));
-  }
-}
-
-// MVP wiring
-const notificationService = new NotificationService([
-  new EmailProvider({ from: 'noreply@goaldy.ai', client: resend }),
-]);
-
-// Future — add without changing existing code:
-// new WhatsAppProvider({ ... })
-// new TelegramProvider({ ... })
-```
-
-User notification preferences are stored in Postgres (`notification_preferences` table: user_id, channel, event_type, enabled). Users manage preferences in Settings → Notifications. **Implemented:** The Settings → Notifications tab is live — 4 email toggles (one per event type), read from and persisted to `notification_preferences` via the `settings.updateNotificationPref` tRPC mutation. Defaults to enabled when no row exists.
-
-#### F17.2 Notification Events
-
-**Real-time events** (sent immediately on trigger):
-
-|Event|Trigger|Subject line|
-|---|---|---|
-|`sync.failed`|`/api/ingest` returns non-200 or SimpleFIN cron job errors|"Goaldy sync failed — action needed"|
-|`drive.disconnected`|Google refresh token revoked|"Your Google Drive connection needs attention"|
-|`session.new_device`|New login invalidates prior session|"New sign-in to your Goaldy account"|
-
-**Weekly digest** (sent every Monday 09:00 user timezone):
-
-|Content block|Included when|
-|---|---|
-|Untagged transactions count|triage queue has >0 items|
-|Goal shortfalls awaiting resolution|any goal has unresolved shortfall|
-|Budget summary|any tag is >90% of budget or over budget|
-|Top insight of the week|highest-priority intelligence feed card|
-|Savings rate vs prior week|always included|
-
-The weekly digest is a single email combining all relevant blocks. If no blocks are relevant (everything is clean), no digest is sent that week — avoiding empty "nothing to report" emails.
-
-**Notification preferences default state:**
-
-|Event|Default|
-|---|---|
-|`sync.failed`|Enabled|
-|`drive.disconnected`|Enabled|
-|`session.new_device`|Enabled|
-|Weekly digest|Enabled|
-
-All can be disabled individually in Settings → Notifications.
-
-#### F17.3 Email Design
-
-Sender: `Goaldy <noreply@goaldy.ai>` Reply-to: none (no-reply is genuine — no monitored inbox)
-
-Email design: plain, clean, on-brand. Midnight Indigo header with Goaldy logo. White body. Amber Gold CTA buttons. Plus Jakarta Sans via web-safe fallback (Arial). No tracking pixels. Unsubscribe link in footer for digest emails (required by law). Real-time alerts do not have an unsubscribe link — they are account security notifications.
-
-**Email templates (Resend):**
-
-|Template|Type|
-|---|---|
-|`sync-failed`|Real-time|
-|`drive-disconnected`|Real-time|
-|`session-new-device`|Real-time|
-|`weekly-digest`|Weekly|
-|`invite`|One-time|
-|`waitlist-confirmation`|One-time|
-
-#### F17.4 Privacy Constraint
-
-**No financial data in notification content.** Email bodies may reference counts ("3 transactions need tagging") and status signals ("your sync failed") but never amounts, merchant names, account balances, or transaction descriptions. This is both a privacy principle and a practical security measure — email is unencrypted in transit.
-
-#### F17.5 Future Channels (WhatsApp / Telegram)
-
-When WhatsApp or Telegram providers are added:
-
-- A new class implementing `NotificationProvider` is created
-- User preference table gains a new channel option
-- No changes to `NotificationService`, `NotificationEvent` types, or any existing email code
-- Real-time events are well-suited for WhatsApp/Telegram; the weekly digest remains email-only
+- API bearer token (show current token, rotate button, copy button)
+- Short explainer: "Any tool can post transactions to `POST /api/transactions` with this token. See API docs."
+- API documentation link (self-hosted Swagger UI / OpenAPI)
+- Link to example adapter scripts in `/scripts` (e.g. Moneyman → Goaldy)
 
 ---
 
 ## 4. Non-Goals (Explicit Exclusions)
 
-These will never be added without a deliberate PRD amendment:
-
-|Feature|Reason excluded|
-|---|---|
-|Envelope budgeting / YNAB methodology|No opinion on budgeting methodology; conflicts with design principles|
-|Bank credential management|Goaldy never holds or proxies bank credentials|
-|Plaid / Finanda / broker-side integrations|User brings their own data pipeline|
-|Transaction execution (payments, transfers)|Read-only financial intelligence only|
-|Multi-user / household shared ledger|Single-user only; concurrent sessions unsupported by architecture|
-|Individual investment holdings tracking|Portfolio value tracked at account level only|
-|Mobile native app|Web-only until Phase 4; responsive design is not a mobile app|
-|Social or comparison features|No sharing, no benchmarking against other users|
-|Public API for third-party consumers|Ingest API is inbound only|
-|Email/password authentication|Google OAuth only; no credential management|
-|Multi-provider SSO|Google only at MVP; Drive dependency makes this a structural constraint|
-|Old Goals feature (Type A/B/C goal types)|Replaced by F8 Plan pillars; DB table and router removed pre-launch|
+| Feature                       | Why Not                                 |
+| ----------------------------- | --------------------------------------- |
+| Multi-user / household mode   | Single-user only. Zero complexity.      |
+| Plaid / bank integrations     | User brings data via Moneyman or CSV    |
+| Transaction execution         | Read-only financial intelligence        |
+| Investment portfolio tracking | Account-level balance only, no holdings |
+| Mobile app                    | Web responsive only                     |
+| Comparison / benchmarking     | No social features                      |
+| Email notifications           | Phase 1+ if needed                      |
+| Multi-language beyond Hebrew  | English + Hebrew only                   |
+| Advanced forecasting          | Phase 2+                                |
 
 ---
 
-## 5. Phased Delivery
+## 5. Integrations (Generic REST — No Special Cases)
 
-### Phase 0 — Builder Replaces Buxfer
+**There is no Moneyman-specific endpoint, and no special ingest surface.** Every integration — Moneyman, a bash script, a Zapier webhook, a spreadsheet macro, your own future tools — uses the exact same REST API the frontend uses, authenticated with a bearer token. One door, one contract, one set of docs.
 
-F2 (Buxfer import), F1 (accounts), F3 (transaction list, basic tagging), F4 (tag tree setup), F5 (rules engine), **F15 (auth + onboarding)**, **F16 (session management)**
+**Why this is the design:** A dedicated ingest endpoint would be a second code path duplicating what `POST /api/transactions` already does, with no added capability. The generic endpoint is the integration primitive. If it's good enough for the UI, it's good enough for Moneyman.
 
-**Gate:** Builder uses Goaldy daily and cancels Buxfer subscription.
+### 5.1 Auth
 
-### Phase 1 — Core Product
+All API calls (except `POST /session`) require a bearer token:
 
-F5 (AI categorization + triage), F6 (Expense + Income + Net Worth dashboards), F7 (Budgets screen, basic), F11 (i18n, Hebrew + RTL), **F17 (notifications — real-time alerts only)**
+```
+Authorization: Bearer <API-TOKEN>
+```
 
-### Phase 1.5 — Public Beta Launch
+The token is generated at first run (or set via env var) and shown in Settings → Integrations. It grants the same full access the logged-in user has — this is a single-user app, so there is one identity and one token scope. Rotating the token is a Settings action.
 
-**F14 (landing page + waitlist)**, F17 (weekly digest), first external users onboarded
+### 5.2 The two properties that make generic ingest work
 
-### Phase 2 — Intelligence Layer
+Because scrapers post batches and re-post overlapping date ranges on every run, the transaction endpoint must guarantee:
 
-F6 (Cashflow dashboard), F8 (Plan — member management UI, add/edit item sheet, link account sheet), F9 (Intelligence feed — anomaly + cashflow + plan cards), F12 (Israeli financial instruments — קרן השתלמות + pension), F13 (SimpleFIN integration, API keys)
+1. **Batch create.** `POST /api/transactions` accepts either a single object or an array. A scraper posts one array per run, not N requests.
+2. **Idempotent dedup.** The server computes `import_hash = SHA-256(date + amount + description + account_id)` for each incoming transaction and silently skips any hash that already exists. Re-posting the same range creates zero duplicates. The response reports how many were created vs skipped.
 
-### Phase 3 — Planning and Depth
+These two properties live on the generic endpoint, so no integration ever needs anything bespoke.
 
-F8 (Plan — Retirement Phase 2: drawdown modeling, National Insurance income, survivor benefits, partner joint retirement), F9 (mortgage refinancing card), F10 (comparison reports, savings rate), F3 (split transactions, 30-day forecast), F7 (budget edit inline history, scheduled column)
+### 5.3 Account mapping is the caller's job
 
-### Phase 4 — Monetization
+Incoming data identifies accounts however the source does (e.g. Moneyman uses `companyId` + `account`). Mapping those to a Goaldy `account_id` is a **caller-side convention**, not server code. Two supported patterns:
 
-F9 (lead gen cards for free tier), Stripe integration, Pro tier feature flags, legal review of lead gen framing, mobile-responsive polish
+- The caller looks up the Goaldy `account_id` (via `GET /api/accounts`) and posts transactions already carrying the correct `account_id`.
+- A thin adapter script (maintained by the user, outside Goaldy) translates source fields to the Goaldy transaction shape before posting.
+
+Goaldy stays clean: it accepts well-formed transactions and does not embed knowledge of any specific scraper's payload.
+
+### 5.4 Example: Moneyman via a tiny adapter
+
+Moneyman's `webPost` payload isn't the Goaldy shape, so the user points Moneyman at a ~20-line adapter (their own, or a community recipe) that maps fields and forwards to `POST /api/transactions` with the bearer token. Goaldy itself needs no Moneyman code. This adapter pattern is documented in the README, not baked into the app.
+
+> Design note: if a specific adapter becomes universally wanted, it ships as an optional example script in `/scripts`, never as a core endpoint.
 
 ---
 
-_Document created: 2026-04-05. This is a living document — update before each phase begins and after any material product decision._
+## 6. REST API Contract
+
+**Every resource exposed, every verb, no locked features.** The backend serves a complete OpenAPI 3.1 spec and Swagger UI; the frontend consumes generated types from it. Verb convention across all resources: `GET` (read), `POST` (create), `PATCH` (partial update), `DELETE` (remove). No `PUT`.
+
+### Interactive docs
+
+```
+GET /api/docs             # Swagger UI (browsable, "try it out")
+GET /api/openapi.json     # OpenAPI 3.1 document (machine-readable, source of client types)
+```
+
+### Accounts
+
+```
+GET    /api/accounts                 # List (filters: archived, type)
+POST   /api/accounts                 # Create
+GET    /api/accounts/:id             # Get one
+PATCH  /api/accounts/:id             # Partial update
+DELETE /api/accounts/:id             # Archive
+GET    /api/accounts/:id/snapshots   # List snapshots
+POST   /api/accounts/:id/snapshots   # Add snapshot
+```
+
+### Transactions
+
+```
+GET    /api/transactions                      # List (filters: tag, account, date_from/to, type; paginated)
+POST   /api/transactions                      # Create — ONE object OR an array (batch, idempotent)
+GET    /api/transactions/:id                  # Get one
+PATCH  /api/transactions/:id                  # Partial update
+DELETE /api/transactions/:id                  # Delete
+POST   /api/transactions/:id/transfers/find   # Find transfer peer
+```
+
+**`POST /api/transactions` is the universal ingest primitive:**
+
+- Accepts a single object or an array.
+- Computes `import_hash` per transaction; silently skips existing hashes (idempotent).
+- Runs the rules engine on created transactions (auto-tag).
+- Response: `{ "created": N, "skipped": M, "errors": [ { index, message } ] }`
+- Moneyman, scripts, and webhooks all post here. There is no separate ingest endpoint.
+
+### Tags
+
+```
+GET    /api/tags                     # Tree structure
+POST   /api/tags                     # Create
+GET    /api/tags/:id                 # Get one
+PATCH  /api/tags/:id                 # Partial update
+DELETE /api/tags/:id                 # Delete (blocked if transactions exist; reassign first)
+GET    /api/tags/:id/transactions    # Transactions with this tag
+GET    /api/tags/:id/budget-status   # Budget progress
+```
+
+### Budgets (derived, read-only)
+
+```
+GET    /api/budgets              # All tags with budgets + progress
+GET    /api/budgets/summary      # Month-to-date summary
+GET    /api/budgets/:tag_id      # Budget + transactions for one tag
+```
+
+### Rules
+
+```
+GET    /api/rules                # List
+POST   /api/rules                # Create
+GET    /api/rules/:id            # Get one
+PATCH  /api/rules/:id            # Partial update
+DELETE /api/rules/:id            # Delete
+POST   /api/rules/test           # Test rule against recent transactions
+```
+
+### Goals
+
+```
+GET    /api/goals                # List
+POST   /api/goals                # Create
+GET    /api/goals/:id            # Get one
+PATCH  /api/goals/:id            # Partial update
+DELETE /api/goals/:id            # Delete
+```
+
+### Dashboards (derived, read-only)
+
+```
+GET    /api/dashboards/expense          # Expense breakdown (pie + trend)
+GET    /api/dashboards/income           # Income breakdown
+GET    /api/dashboards/net-worth        # Net worth trend
+GET    /api/dashboards/merchants        # Top merchants
+```
+
+### Settings & Preferences
+
+```
+GET    /api/settings             # All settings + preferences (currency, language, date format)
+PATCH  /api/settings             # Update one or more settings/preferences
+```
+
+> Settings and preferences are rows in the same SQLite file as financial data — read and written through this resource, not a config file or env var.
+
+### System & Auth
+
+```
+GET    /health                   # Server status (no auth)
+POST   /api/session              # Login (password) — issues httpOnly session cookie
+DELETE /api/session              # Logout
+GET    /api/token                # Show current API bearer token (Settings → Integrations)
+POST   /api/token/rotate         # Rotate the API bearer token
+```
+
+**Auth model:** Frontend uses an httpOnly session cookie (`POST /api/session`). Machine integrations use a bearer token (`Authorization: Bearer <token>`). Both grant identical full access (single-user app). Every `/api/*` route except `/health`, `/api/session`, `/api/docs`, and `/api/openapi.json` accepts either.
+
+**Conventions:** All responses JSON. List endpoints paginated (`limit`, `offset`) and return `{ data, total, limit, offset }`. Errors return `{ error, details? }` with correct status (400/401/404/409). There is no `/api/ingest`.
+
+---
+
+## 7. Docker Deployment
+
+**docker-compose.yml:**
+
+```yaml
+version: "3.9"
+services:
+  app:
+    image: goaldy:latest
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: /data/goaldy.db
+      SESSION_SECRET: ${SESSION_SECRET}
+      API_KEY: ${API_KEY}
+    volumes:
+      - goaldy-data:/data
+    restart: unless-stopped
+
+volumes:
+  goaldy-data:
+    driver: local
+```
+
+**User runs:**
+
+```bash
+docker-compose up -d
+# App available at http://localhost:3000
+# Database persisted to Docker volume (survives restart)
+```
+
+**Backup:**
+
+```bash
+docker cp goaldy:/data/goaldy.db ./backup.db
+```
+
+---
+
+## 8. Phase 0 Scope & Timeline
+
+**What ships:**
+
+- ✅ Accounts (all types)
+- ✅ Transactions (create, edit, delete, transfer detection)
+- ✅ Tags (hierarchy, budget config)
+- ✅ Import (CSV, OFX, Buxfer)
+- ✅ Rules (merchant pattern → tag)
+- ✅ Dashboards (expense, income, net worth)
+- ✅ REST API (all resources, all verbs) with bearer-token auth
+- ✅ Batch + idempotent `POST /api/transactions` (the universal ingest primitive)
+- ✅ OpenAPI 3.1 spec + Swagger UI at `/api/docs`; frontend types generated from it
+- ✅ Settings + preferences stored in the same SQLite file (via `/api/settings`)
+- ✅ Session auth (password login) + API bearer token
+- ✅ Hebrew + RTL
+- ✅ Docker deployment
+
+**What doesn't:**
+
+- ❌ Splits (defer if timeline tight, but low-hanging fruit)
+- ❌ Labels (defer, non-critical)
+- ❌ Advanced rules (regex, amount range, account scope — basic substring only)
+- ❌ Notifications (Phase 1)
+- ❌ Import history (Phase 1)
+- ❌ API key management UI (Phase 1, hardcode API key for now)
+
+**Timeline:**
+
+- Week 1: Backend setup, database schema, accounts + transactions CRUD, auth
+- Week 2: Import pipeline, Moneyman ingest, rules engine
+- Week 3: Frontend (React, dashboards), CSS/RTL
+- Week 4: Polish, deploy Docker, testing
+- **Total: 4 weeks to Phase 0 ship**
+
+---
+
+## 9. Success Metrics (You)
+
+1. **Can log in** → Yes
+2. **Can import Buxfer export** → All data appears
+3. **Can see accounts + balances** → Correct totals
+4. **Can tag transactions** → Tags apply, budgets calculate
+5. **Can see dashboards** → Numbers match manual math
+6. **Can delete Buxfer account** → Never look back
+
+---
+
+_Created: 2026-06-07. Self-hosted, single-user, stupid-simple model. No complexity. No excuses._
