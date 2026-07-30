@@ -202,6 +202,22 @@ User marks one leg as TYPE = TRANSFER → system searches opposite account for p
 - Show trend (spending over last 3, 6, 12 months)
 - Show burn rate (if trending, when will budget run out?)
 
+#### Time horizon on tag views
+
+The selected horizon is app-wide and persists across views, with one
+exception: **navigation resets, drill-down preserves.**
+
+- Arriving at a tag from the **tags table**, or from the **sidebar** when not
+  already on a tag detail page, pins the horizon to the **last 12 months**.
+  The app-wide default (this month) usually renders an empty tag, which reads
+  as "this tag has no data" rather than "no data this month".
+- Arriving via a **drill-down** — a dashboard chart row or a transaction's tag
+  chip — or a **lateral move** — a breadcrumb ancestor, or the sidebar while
+  already on a tag — preserves the current horizon, so the context the user
+  came from carries into the detail view.
+- Choosing a horizon while on a tag view updates the app-wide value, so the
+  choice survives subsequent tag-to-tag navigation.
+
 **Tag management:**
 
 - Create, rename, reparent, delete
