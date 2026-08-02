@@ -67,6 +67,26 @@ That's it. No secondary goals. One user. Done.
 
 **Single-user only.** No household mode. No shared ledger. One login, one data set. This is not a feature gap—it's a design choice that keeps code simple.
 
+**Metrics are true to their data.** The horizon selects *which data is in scope*. It does not define the metric. Any figure normalised over time — an average, a rate, a per-month
+figure — divides by the **real elapsed span of the data actually present**, never by the nominal length of the selected window.
+
+A tag whose first transaction is three months old reads the same monthly average on an ALL horizon as on a "last 12 months" one, because in both cases there are three months of data to average. Dividing by twelve would understate it fourfold and, worse, would make *widening* the horizon *shrink* the average — the opposite of what the label promises.
+
+This applies to every KPI or metric card in the app, so the same number never means two things in two places:
+
+| Metric | Divisor |
+|---|---|
+| Tag view — Average Income / Average Expense | months from first activity in the horizon to the horizon end |
+| Plan — average monthly income / expenses | months of real data in the trailing window, not a fixed 12 |
+| Plan — emergency fund `avgMonthlyExpenses` | months of real data, not a fixed 12 |
+
+Two rules follow from it:
+
+- **Name the divisor.** A card that averages says what it divided by ("per month · over 3 months"). A denominator the user cannot see is a denominator they will assume.
+- **Refuse rather than guess.** When the span cannot be measured, show no average at all. A blank is honest; a number derived from a fallback divisor is not, because nothing on screen distinguishes it from a real one.
+
+The second rule is written from experience: an unbounded horizon once produced an infinite span, the divisor silently fell back to `1`, and a tag with three years of history at ₪2,000/month rendered "Average Expense ₪72,000 per month" beside two entirely correct totals. Every failure in this area has been a plausible-looking wrong number rather than a crash, which is why suppression is the required behaviour and why these divisors carry unit tests that assert the *number*, not merely that a card appeared.
+
 ---
 
 ## 2. User Persona
