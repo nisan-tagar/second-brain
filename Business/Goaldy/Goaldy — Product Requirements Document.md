@@ -3,8 +3,8 @@
 | Field            | Value                |
 | ---------------- | -------------------- |
 | **Created**      | 2026-06-07           |
-| **Last Updated** | 2026-06-07 16:00 UTC |
-| **Version**      | 3.0 (clean baseline) |
+| **Last Updated** | 2026-08-08           |
+| **Version**      | 3.1                  |
 | **Status**       | Active               |
 
 > **Reset note:** This document was reset to a clean, forward-looking baseline on 2026-06-07. All prior architecture explorations (cloud relay, browser-side SQLite, Google Drive sync, Postgres, tiered Free/Pro model) are **superseded and intentionally not preserved**. The product is now a single-user, self-hosted app with one SQLite file managed by the backend. The changelog below starts here and tracks changes going forward.
@@ -16,6 +16,7 @@
 | Version | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **3.0** | 2026-06-07 | Clean baseline. Single-user self-hosted app. Node + Express backend, React frontend, one SQLite file holding financial data + user settings + preferences. Generic REST API (all resources, all verbs) with bearer-token auth; `POST /api/transactions` is the batch, idempotent ingest primitive. Full OpenAPI/Swagger spec is a required deliverable. All prior session history collapsed and dropped. |
+| **3.1** | 2026-08-08 | Added a Visual Design Language subsection under §1.4 (Design Principles): colour roles and the green/red money-direction-only rule, the six-step type scale (with the four smallest steps' grandfathering explained), three radii, three elevation levels, and five named interaction states — codifying the existing identity as rules a reader can apply, not a token dump. Companion divergence list: `docs/design/2026-08-07-divergences.md` in the app repo. |
 
 ---
 
@@ -86,6 +87,47 @@ Two rules follow from it:
 - **Refuse rather than guess.** When the span cannot be measured, show no average at all. A blank is honest; a number derived from a fallback divisor is not, because nothing on screen distinguishes it from a real one.
 
 The second rule is written from experience: an unbounded horizon once produced an infinite span, the divisor silently fell back to `1`, and a tag with three years of history at ₪2,000/month rendered "Average Expense ₪72,000 per month" beside two entirely correct totals. Every failure in this area has been a plausible-looking wrong number rather than a crash, which is why suppression is the required behaviour and why these divisors carry unit tests that assert the *number*, not merely that a card appeared.
+
+**Visual design language.** Goaldy already reads as a dense instrument for someone who reads their own numbers closely: cool near-white ground rather than a warm cream, a single chromatic anchor, colour reserved for meaning, small type with tabular numerals, tables built for reading many rows at once. That identity is worth keeping — the rules below make it explicit and checkable, not a new direction. Write UI against these rules; do not invent a colour, size, radius or elevation outside them.
+
+*Colour has five roles. Money direction owns green and red — nothing else may.*
+
+| Role | Token(s) | Value(s) | Rule |
+|---|---|---|---|
+| Ground | `bg` / `surface` | `#F4F7F6` / `#FFFFFF` | Cool. Never warm — no cream, no off-white with a yellow cast. |
+| Interactive | `indigo` | `#283593` | The one chromatic anchor. Everything that is clickable, selected, or focused and needs to read as "part of the app acting" uses it; nothing else does. |
+| Money direction | `green` / `red` | `#2E7D32` / `#C62828` | **Reserved for the direction money moved — income vs. expense — and nothing else.** Never a status colour (no green "success" toast, no red "error" badge), never decoration. The one sanctioned exception: a destructive confirm button (`ConfirmDialog`'s `destructive` prop, e.g. "Delete account") is red, because "this destroys something" is the other thing red means in this app. |
+| Text | `t1` / `t2` / `t3` | `#212121` / `#4A5568` / `#9AA09F` | Hierarchy — primary, secondary, muted/label. Pick by importance, not by taste. |
+| Structure | `border` / `border2` | `#E8ECEF` / `#D0D5DD` | Dividers and outlines. `border2` only for a stronger internal separation (e.g. a heavier rule inside a table); `border` everywhere else. |
+
+If you are about to reach for `green` or `red` for anything other than "this is money and this is which way it moved," stop — that is the single rule this section exists to protect, and the destructive-confirm exception above is not a precedent for a second one.
+
+*Type is six named steps, chosen by role, not by an eyeballed pixel value.*
+
+| Step | Size | Role | Where it's used today |
+|---|---|---|---|
+| `micro` | 10px | Table meta, badges, chart labels | 60 sites |
+| `label` | 11px | Column headers, controls, toggles | 109 sites |
+| `body` | 12px | Table data — the app's default reading size | 140 sites |
+| `bodyLg` | 13px | Card titles, primary reading text | 121 sites |
+| `title` | 15px | Section headings | 12 sites |
+| `display` | 18px | Page titles | 3 sites |
+
+A named step sets font-size *and* line-height together. Pick the step that matches what the text is for; never introduce a pixel size outside these six.
+
+One deliberate, permanent exception: the four smallest steps (`micro`/`label`/`body`/`bodyLg`, 10–13px) still coexist with their un-migrated Tailwind arbitrary-value form (`text-[12px]` etc.) at roughly 430 call sites, because the arbitrary form sets font-size only — it never carried a line-height, so swapping it for the named step is a real visual change (a reflow) at every one of those sites, and nothing in this codebase can verify a visual change. Those four sizes are frozen, not open: no *new* arbitrary size may appear beside them, and the seven sizes that used to exist outside the six-step scale (8/9/14/16/17/20/22px) are gone and may not return. Collapsing the remaining 430 sites onto the named steps is its own future project, gated on deciding the line-height per site — it is not a cleanup to do opportunistically, and a reader should not "finish the job" without that per-site review.
+
+*Three radii.* `md` (8px) is the default, used almost everywhere. `lg` (12px) is for cards. `full` is for pills — tags, badges, anything pill- or circle-shaped. Nothing else; a fourth radius is a design decision that needs the same rigour as a new colour.
+
+*Three elevation levels, chosen by what the element is, not how prominent you want it to look.*
+
+| Level | Looks like | Used for |
+|---|---|---|
+| Flat | A border, no shadow | The app's default — tables, panels, most surfaces |
+| Raised | A border plus a soft shadow | Cards |
+| Overlay | A border plus a strong shadow | Modals and popovers — anything that floats above the page |
+
+*Named interaction states — decided once, not per component.* Every interactive element implements five states consistently: **focus** (a visible indigo ring), **hover** (a subtle shift in the same hue family as the element), **disabled** (reduced opacity, no hover or focus response), **error** (a red border/text on a form field — this is validation, a separate, scoped use of red, not the money-direction rule above), and **loading** (a spinner or skeleton, never a control that silently stops responding). A control that looks interactive but implements none of these five is a bug.
 
 ---
 
