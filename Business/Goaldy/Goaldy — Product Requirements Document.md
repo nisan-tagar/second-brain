@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-21 v2.0        |
-| **Version**      | 2.0                    |
+| **Last Updated** | 2026-08-24 v2.1        |
+| **Version**      | 2.1                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -18,6 +18,7 @@
 |1.5–1.9|2026-04-05|Various refinements to transaction types, budgets, goals, and intelligence feed — see git history for detail.|
 |1.10|2026-04-06|F14–F17 added: landing page, authentication/onboarding, session management, notification system.|
 |**2.0**|**2026-08-21**|**Full rewrite to match the shipped self-hosted pivot.** Versions 1.0–1.10 described a multi-tenant hosted product: Google OAuth + Drive-as-database, Postgres, an invite-only waitlist beta, AI/Claude categorization, Israeli-specific financial-instrument cards, and Phase-4 Stripe monetization. None of that was built. What shipped is single-user, self-hosted software — one operator, one `goaldy.db` file, `ADMIN_PASSWORD`-based login, no signup funnel — plus a household financial-planning simulator ("Plan") and bilingual (English/Hebrew, RTL) i18n that the old PRD never described at all. This version rewrites every feature section against the actual codebase, deletes sections describing things never built, and marks in-progress work ("Coming soon" stub pages) honestly rather than as shipped. It also fixes an internal contradiction present since v1.1: F6.2 (old) referenced an `is_income` tag flag that F4.1 (old) had already said was removed — confirmed via the schema that no such column has ever existed in the shipped app; this version does not reintroduce it.|
+|2.1|2026-08-24|F2.1: the in-app data importer shipped (Buxfer full-migration adapter, Stage 0+1; a generic, single-account CSV adapter with a column-mapping wizard and Mint/YNAB presets, Stage 2) — corrected from "Not built — deferred" to Shipped. OFX/QIF remains not built and unscoped, split out as its own row.|
 
 ---
 
@@ -90,7 +91,8 @@ Create, edit, archive; link an `account_number` for integration matching (e.g. M
 |Moneyman webhook (`POST /api/integrations/moneyman`)|Shipped|
 |Manual entry|Shipped|
 |Buxfer CSV/TSV migration (`scripts/migrate-buxfer.ts`)|Shipped, but developer-only CLI — requires shell access to the container, not reachable from the running app|
-|Generic CSV/OFX in-app upload|**Not built** — deferred (see `docs/features/2026-08-19-in-app-data-importer`)|
+|In-app data importer — Buxfer full-migration adapter and a generic, single-account CSV adapter with a column-mapping wizard (presets for Mint/YNAB)|Shipped (`docs/features/2026-08-19-in-app-data-importer`) — an in-app wizard (Import Statement) replaces the old dev-only CLI path for both cases|
+|OFX/QIF in-app upload|**Not built** — named as a future stage of the in-app importer, no design doc yet|
 |SimpleFIN, bank-specific parsers|Not built|
 
 There is no encrypted-blob relay, no server-side queue with a TTL, no in-browser SQLite receiving decrypted payloads. Everything lands directly in the one server-owned `goaldy.db` via the same idempotent insert path (`ingestTransactions()`).
