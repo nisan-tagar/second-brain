@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-24 v2.1        |
-| **Version**      | 2.1                    |
+| **Last Updated** | 2026-08-26 v2.2        |
+| **Version**      | 2.2                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -19,6 +19,7 @@
 |1.10|2026-04-06|F14–F17 added: landing page, authentication/onboarding, session management, notification system.|
 |**2.0**|**2026-08-21**|**Full rewrite to match the shipped self-hosted pivot.** Versions 1.0–1.10 described a multi-tenant hosted product: Google OAuth + Drive-as-database, Postgres, an invite-only waitlist beta, AI/Claude categorization, Israeli-specific financial-instrument cards, and Phase-4 Stripe monetization. None of that was built. What shipped is single-user, self-hosted software — one operator, one `goaldy.db` file, `ADMIN_PASSWORD`-based login, no signup funnel — plus a household financial-planning simulator ("Plan") and bilingual (English/Hebrew, RTL) i18n that the old PRD never described at all. This version rewrites every feature section against the actual codebase, deletes sections describing things never built, and marks in-progress work ("Coming soon" stub pages) honestly rather than as shipped. It also fixes an internal contradiction present since v1.1: F6.2 (old) referenced an `is_income` tag flag that F4.1 (old) had already said was removed — confirmed via the schema that no such column has ever existed in the shipped app; this version does not reintroduce it.|
 |2.1|2026-08-24|F2.1: the in-app data importer shipped (Buxfer full-migration adapter, Stage 0+1; a generic, single-account CSV adapter with a column-mapping wizard and Mint/YNAB presets, Stage 2) — corrected from "Not built — deferred" to Shipped. OFX/QIF remains not built and unscoped, split out as its own row.|
+|2.2|2026-08-26|F7 (Budgets) shipped — corrected from "data model exists, UI does not" to Shipped: per-leaf-tag budget generations, in-place editing of the open generation, closed-form rollover, automatic budget-move offers when a budgeted tag gains a child or is reparented under one, trailing-average hint, and the `/budgets` page (list/grid, summary strip, per-tag history, not-budgeted section). F4.1: removed the stale description of budget fields as columns on the tag row — budgeting now lives in its own per-tag generation history, not tag columns. F6.3: corrected the dashboard income/expense classification description — it was never actually driven by any tag-level budget field; fixed to state it comes solely from the transaction's own `type`. F14.2: added budgets to the feature-highlights list (the landing page itself is not yet built; this is the source-of-truth update for whenever it is, per this repo's CLAUDE.md convention).|
 
 ---
 
@@ -143,7 +144,7 @@ A triage banner, saved views, and a 30-day forecast panel were speculative addit
 
 ### F4.1 Tag Tree
 
-Arbitrary-depth tree via adjacency list (`parent_id`); a tag is the sole source of truth for categorization — there is no separate "category" concept. Every tag can optionally carry a full budget-line configuration (amount, expense/income type, repeat period, rollover, optional account scope) — budget fields are all nullable, and their absence means the tag has no budget target. **No `is_income` column exists or has ever existed in the shipped schema** — this document previously (v1.1) said it was removed and then (v1.2 predecessor, "old F6.2") contradicted that by describing a dashboard driven by it; that contradiction is resolved here in favor of the schema, which has no such column.
+Arbitrary-depth tree via adjacency list (`parent_id`); a tag is the sole source of truth for categorization — there is no separate "category" concept. Budgeting (F7) is no longer stored as columns on the tag row — as of the Tag Budgets feature, a leaf tag's budget history lives in its own table, and deleting a tag cascades to delete that history (F4.3). **No `is_income` column exists or has ever existed in the shipped schema** — this document previously (v1.1) said it was removed and then (v1.2 predecessor, "old F6.2") contradicted that by describing a dashboard driven by it; that contradiction is resolved here in favor of the schema, which has no such column.
 
 ### F4.2 Tagging Constraint
 
@@ -185,13 +186,42 @@ Net worth trend over time and a liquidity-class breakdown, reading from account 
 
 ### F6.3 Correction from earlier drafts
 
-The old F6.2 described income/expense classification as driven by an `is_income` tag flag. No such flag exists (F4.1) — income vs. expense classification for dashboard purposes comes from a tag's `budget_type` where set, or the transaction's own `type` (`income`/`expense`) otherwise.
+The old F6.2 described income/expense classification as driven by an `is_income` tag flag. No such flag exists (F4.1) — income vs. expense classification for dashboard purposes comes solely from the transaction's own `type` (`income`/`expense`); no tag-level field is involved. (A budget's own expense/income type, F7, is a separate per-budget setting scoped to the Budgets page — it does not feed the dashboard's classification.)
 
 ---
 
 ## F7 — Budgets
 
-**Data model exists; UI does not yet.** Tags carry full budget configuration (F4.1) and a `BudgetLineSchema` exists in the shared schema package, but the Budgets nav page currently renders "Coming soon." This is accurately a gap between the data model and the UI, not a fully speculative feature — the moment someone builds the screen, the data it needs is already there.
+**Shipped.** Any leaf tag (one with no children) can carry a budget: an amount, a currency (snapshotted per budget, independent of the base/display currency setting), a period (weekly/biweekly/monthly/quarterly/annually/custom-N-days), an expense/income type, and an optional rollover toggle. A parent tag can never carry a budget directly — the moment a budgeted tag gains a child, its budget closes automatically rather than silently becoming a double-counted rollup over its own children's spending.
+
+### F7.1 Generations
+
+A tag's budget is not one row that gets overwritten on edit — it is a sequence of **generations**, each a budget configuration valid for a date range. Editing the amount effective immediately updates the current (open) generation in place; scheduling a change for a future date closes the current generation and opens a new one starting then. Only the currently open generation is ever edited — a closed generation is permanent history, exactly what it looked like for the period it covered.
+
+### F7.2 Rollover
+
+When enabled, an occurrence's unspent (or over-spent) amount carries forward within the same budget's ongoing generation — computed as a closed form across all of that generation's occurrences to date, not a step-by-step carry that could drift. Rollover never crosses a generation boundary: closing a generation (by editing the amount, or by the tag gaining a child) also closes its rollover math: the next generation starts fresh.
+
+### F7.3 Moving a Budget
+
+Two situations move a budget automatically instead of just deleting it:
+
+- **A budgeted tag gains a child.** Its budget generation closes (F7.1), and the person is offered the option to copy that closed budget's configuration onto the newly added child as its own fresh budget — since the child is now where the actual spending/income the budget was tracking will land.
+- **A tag is reparented under an already-budgeted tag.** Same offer, in the other direction: the moved tag can adopt the new parent's (now-closed) budget.
+
+If the destination tag already has its own budget, or has children of its own, there's no single unambiguous place to move the old budget to — the person sees a plain notice instead of an offer, and nothing is moved automatically.
+
+### F7.4 Trailing Average
+
+The edit view shows an average and a small trend chart over the budget's own trailing occurrences (e.g. 12 trailing months for a monthly budget, 3 trailing years for an annual one) — not a fixed calendar window, since a fixed window means something different for every period length.
+
+### F7.5 The `/budgets` Page
+
+Expense and Income tabs, a summary strip (Budgeted / Actual / Available across the tab), and a choice of two layouts — a grouped list or a card grid with a circular progress indicator — toggled client-side, no new setting. A "Not budgeted" section lists leaf tags with activity but no budget, each with a quick way to set one. A per-tag history view lists every past generation for that tag, read-only except for the currently open one.
+
+### F7.6 What Deleting a Budgeted Tag Does
+
+Deleting a tag that currently has an active budget warns explicitly before proceeding; deletion itself is unchanged (F4.3's existing cascade/reassign behavior) — the budget's history is removed along with the tag, it is not silently orphaned.
 
 ---
 
@@ -310,7 +340,9 @@ A single static marketing page (GitHub Pages), not a signup gate. There is nothi
 
 ### F14.2 Structure
 
-Nav (logo, live-demo link, GitHub link) → hero (self-hosted pitch, primary CTA to the demo) → problem framing (your data on someone else's server) → feature highlights (net worth across liquidity classes, plan ahead of expenses, rules-based categorization) → "Try it" (demo link, read-only/resets-on-release note) → "Self-host it" (`docker compose up -d` snippet, link to the full README) → footer (GitHub repo, `/api/docs`).
+Nav (logo, live-demo link, GitHub link) → hero (self-hosted pitch, primary CTA to the demo) → problem framing (your data on someone else's server) → feature highlights (net worth across liquidity classes, per-tag budgets with rollover, plan ahead of expenses, rules-based categorization) → "Try it" (demo link, read-only/resets-on-release note) → "Self-host it" (`docker compose up -d` snippet, link to the full README) → footer (GitHub repo, `/api/docs`).
+
+As of this writing the landing page has no built artifact yet — the highlights list above is this document's source of truth for what a built landing page should claim, per this repo's CLAUDE.md convention that landing-page copy traces back to this section.
 
 No pricing section, no waitlist form, no sign-in on the landing page itself — none of that applies to self-hosted software.
 
@@ -372,7 +404,7 @@ Confirmed current, replacing the old table:
 
 Rather than a forward-looking phased SaaS rollout (the old §5), here is what's actually true today:
 
-**Shipped:** accounts (all liquidity classes, multi-currency), transactions (ingest, dedup, splits, labels, duplicate detection), tags (arbitrary tree, budget-config-capable), rules-based categorization, the Cashflow/Net-Worth dashboard, the Plan household simulator, notifications (event/condition log), bilingual i18n/RTL, self-host Docker deployment, versioned CI/CD releases, and a public read-only demo.
+**Shipped:** accounts (all liquidity classes, multi-currency), transactions (ingest, dedup, splits, labels, duplicate detection), tags (arbitrary tree), per-tag budgets with generations/rollover/trailing-average (F7), rules-based categorization, the Cashflow/Net-Worth dashboard, the Plan household simulator, notifications (event/condition log), bilingual i18n/RTL, self-host Docker deployment, versioned CI/CD releases, and a public read-only demo.
 
 **Modeled but not surfaced (data exists, UI doesn't):** Budgets screen, Reports screen, onboarding flow.
 

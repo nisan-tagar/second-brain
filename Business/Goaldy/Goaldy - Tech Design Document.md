@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-08-21 v2.0  |
-| **Version**      | 2.0              |
+| **Last Updated** | 2026-08-26 v2.1  |
+| **Version**      | 2.1              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -20,6 +20,7 @@
 |1.8|2026-04-05|Split-blocking CHECK constraint on TRANSFER removed — splits supported on all transaction types; only constraint remaining is single-tag/split mutual exclusivity|
 |1.9|2026-04-05|Postgres schema additions: `waitlist` table (early access + invitation token lifecycle), `notification_preferences` table (per-user per-channel per-event preferences with future channel support); subscriptions table expanded with onboarding_completed_at field reference|
 |**2.0**|**2026-08-21**|**Full rewrite to match the shipped self-hosted pivot.** The product described in v1.0–1.9 (Google OAuth + Drive-as-database, Postgres app DB, tRPC, NextAuth, in-browser wa-sqlite/OPFS, Vercel/Upstash/Resend hosting, AI/Claude categorization, Israeli-specific financial-instrument cards, Stripe monetization, an invite-only waitlist beta) was never built. What shipped instead: a single-user, self-hosted Next.js 15 app where one server process owns exactly one SQLite file via `better-sqlite3` — no cloud dependency, no sync server, no OAuth. This version replaces nearly every section end-to-end, and documents three real, shipped subsystems the old design never mentioned: the household financial-planning "Plan" simulator, live bilingual i18n/RTL, and the Docker/CI-CD/public-demo deployment pipeline. Sections describing things that were never built (Postgres app DB, blob-queue ingest, AI categorization, Israeli instrument cards, monetization hooks) are deleted rather than marked historical — see the repo's git history for the pre-pivot design if it's ever needed for reference.|
+|2.1|2026-08-26|**Budgets (`tag_budgets`) shipped — replaces the `tags.budget_*` columns entirely.** New §4a documents the generation model (one row per budget-configuration-over-a-date-range, a partial unique index enforcing at most one open generation per tag), the leaf-only invariant enforced server-side (a budgeted tag closes its own generation the moment it gains a child), the three-way edit/schedule branch in `setBudget()`, the closed-form rollover computation, the weighted/cash-flow-filtered `Actual` sum shared with every other tag-scoped money query in the app, the trailing-average hint, and the migration's leaf-only-aware backfill of the old columns. §4's `tags` table definition had the 7 `budget_*` columns (and `budget_account_id`, an 8th, dropped without replacement per the PRD's non-goal on forecasting) removed. §4's stale claim that `budget_type` fed dashboard income/expense classification is corrected — it never did; that classification has only ever come from a transaction's own `type`.|
 
 ---
 
@@ -86,7 +87,7 @@ goaldy/
 │       │   │   ├── rules/
 │       │   │   ├── plan/       # Household financial-planning simulator (§8)
 │       │   │   ├── duplicates/
-│       │   │   ├── budgets/    # Stub — "Coming soon" (data model exists, UI doesn't)
+│       │   │   ├── budgets/    # Shipped — list/grid views, edit + history modals (§4a)
 │       │   │   ├── reports/    # Stub — "Coming soon" (dashboard is the real reporting UI)
 │       │   │   └── settings/
 │       │   └── api/            # REST route handlers = the entire backend
@@ -193,18 +194,50 @@ CREATE TABLE transaction_tags (
 CREATE TABLE tags (
   id, parent_id REFERENCES tags(id),  -- NULL = root; arbitrary-depth adjacency-list tree
   name, color, icon,
-  budget_amount REAL,
-  budget_type TEXT CHECK (budget_type IN ('expense','income')),
-  budget_period TEXT CHECK (budget_period IN ('weekly','biweekly','monthly','quarterly','annually','custom')),
-  budget_custom_days, budget_start_date, budget_rollover, budget_end_date,
-  budget_account_id REFERENCES accounts(id),   -- optional account scope
   created_at
 );
 ```
 
-A tag doubles as a budget-line definition — every budget field is nullable, and absence means no budget target on that tag. Sibling-scoped name uniqueness only (case-insensitive) — the same name is legal under two different parents. **There is no `is_income` column anywhere in this schema** — income/expense classification comes from `budget_type` where set, or is inferred from the dominant cash-flow direction of the tag's transactions otherwise. (An earlier draft of this document's companion PRD asserted both that `is_income` was removed *and* that it drove a dashboard — that PRD contradiction is fixed as of this rewrite.)
+Sibling-scoped name uniqueness only (case-insensitive) — the same name is legal under two different parents. **There is no `is_income` column anywhere in this schema, and no `budget_*` columns either** — a tag no longer doubles as a budget-line definition (that was the pre-2026-08-25 shape; see §4a for what replaced it). Income/expense classification for the dashboard comes solely from a transaction's own `type`, never from any tag-level field. (An earlier draft of this document's companion PRD asserted both that `is_income` was removed *and* that it drove a dashboard — that PRD contradiction is fixed as of the v2.0 rewrite; a later draft of the same PRD also claimed a tag's `budget_type` fed dashboard classification, which was never actually true and is corrected in PRD v2.2.)
 
 Splits are enforced in `apps/web/lib/server/queries/transaction-tags.ts`: `categories` mode always writes a single row (position 0, weight 1); `split` mode requires weights to sum to 1 within a small tolerance and rejects negative weights (`TagWeightError`).
+
+### 4a. Budgets (`tag_budgets`)
+
+Budgeting moved off the `tags` row entirely into its own table, one row per budget **generation**:
+
+```sql
+CREATE TABLE tag_budgets (
+  id, tag_id REFERENCES tags(id) ON DELETE CASCADE,
+  amount REAL NOT NULL,
+  currency TEXT NOT NULL,        -- snapshotted at generation creation (§ below) — independent of base/display currency
+  type TEXT CHECK (type IN ('expense','income')),
+  period TEXT CHECK (period IN ('weekly','biweekly','monthly','quarterly','annually','custom')),
+  custom_days INTEGER,           -- only when period='custom'; clamped to >=1 everywhere it's consumed
+  rollover INTEGER DEFAULT 0,
+  start_date TEXT NOT NULL,
+  end_date TEXT,                 -- NULL = this generation is open (current)
+  created_at,
+  CHECK (end_date IS NULL OR end_date >= start_date)
+);
+CREATE UNIQUE INDEX idx_tag_budgets_open ON tag_budgets(tag_id) WHERE end_date IS NULL;
+```
+
+**One row is not a budget — a sequence of rows is.** A tag accumulates a new generation every time its amount/period/rollover changes on a future date, or every time it's closed by the leaf-only rule below. `idx_tag_budgets_open` is a *partial* unique index: it enforces "at most one open (`end_date IS NULL`) generation per tag" at the database layer, not just in application code. A closed generation (`end_date IS NOT NULL`) is permanent, point-in-time-correct history — it is never edited or deleted by any code path; only the open generation ever is.
+
+**Leaf-only (enforced server-side, not just in the UI).** `setBudget()` (`lib/server/queries/tag-budgets.ts`) rejects opening a generation on any tag with ≥1 child. The moment a budgeted tag gains a child — reparenting an existing tag under it, or creating a new one — `closeOpenGenerationForNewParent()` fires unconditionally (exploiting the fact that a leaf-only invariant means "gained a child" and "must close now" are the same event) and closes that tag's open generation, clamping `end_date` to `max(day-before-the-change, the generation's own start_date)` so a same-day open-then-close can never violate the CHECK constraint above. The API layer (`POST`/`PATCH /api/tags`) surfaces the closed generation back to the client as `closedParentBudget`, which is what drives the "move this budget to the new child?" prompt (D6 below) — a UI convenience, not a second source of truth.
+
+**Editing vs. scheduling.** `setBudget(tagId, input)` is a three-way branch on `input.startDate` against the tag's current open generation: an earlier date is rejected outright; the *same* start date updates the open row in place (amount/currency/type/period/custom_days/rollover — this is what "editing your budget" means from the UI); a *later* date closes the current generation (`end_date = day before`) and inserts a new open one. A new generation's `start_date` is also checked against `MAX(end_date)` across *all* of the tag's history (not just the open row) so a back-dated start can never land inside an already-closed generation's range — `getGenerationCovering()` has no tiebreaker, so two generations covering the same day would make point-in-time lookups arbitrary.
+
+**Moving a budget (D6).** Two situations produce a `closedParentBudget` the client can offer to copy forward: a budgeted tag gaining a child (above), and reparenting a tag under an already-budgeted tag (the same close fires on the *parent*, for the same leaf-only reason, before the reparent completes). If the destination for that offer already has an open generation of its own, or has children of its own, the roll endpoint (`POST /api/tags/:id/budget/roll`) rejects it (409) and the UI shows a plain notice instead of an accept/decline choice — there is no ambiguous partial-move.
+
+**Rollover — a closed form, not a running total.** When `rollover=1`, an occurrence's `Available` folds in every prior occurrence of the *same generation*: `Available_n = n·amount − Σ(Actual_1..n)`, computed fresh from two aggregate queries every time (current occurrence's actual, and the cumulative actual since the generation's `start_date`) — never a step-by-step carry stored anywhere, so there is nothing to drift or replay. Rollover never crosses a generation boundary by construction: closing a generation and opening a new one resets the sum to zero, because the new generation's own `start_date` is where the aggregate window begins.
+
+**`Actual` is always a weighted, cash-flow-filtered sum.** `computeBudgetStatus()`'s `sumTaggedActualInRange()`, the "not budgeted" aggregator's sum, and the `budget.exceeded` notification check all join `transaction_tags` and compute `SUM(t.amount * COALESCE(tt.weight, 1))` under the same `cashflowExcludeSQL()` predicate every other tag-scoped money query in the app uses (`lib/server/queries/tag-flow.ts` is the reference implementation) — a weight-0 secondary tag (the default for a transaction's non-primary tag in `categories` mode) contributes nothing, a split contributes its proportional share, and a transfer between the user's own accounts is excluded, exactly as it is on the dashboard. `Actual`/`Budgeted`/`Available` are always reported as positive-oriented "how much" figures (via a `resolvedType: 'expense'|'income'` resolved once per status computation and applied consistently), never as raw signed sums a caller would have to re-interpret.
+
+**Trailing average.** `computeTrailingAverage()` reuses the same occurrence-window primitive (`lib/domain/budget-period.ts`'s `walk()`/`stepEnd()`) that resolves "what window does this reference date fall in" — applied N times backward instead of once, so index and window can never disagree with the rest of the feature. Occurrence count is chosen per period type to keep the total look-back at roughly a year or two regardless of granularity (12 trailing weeks/months, 8 quarters, 3 years, 12×N days for custom).
+
+**Migration note.** `migrate.ts`'s one-time backfill of the old `tags.budget_*` columns into `tag_budgets` checks each budgeted tag's child count: a leaf tag's old budget becomes an open generation as before, but a **non-leaf** tag's old budget (legal under the pre-2026-08-25 schema, since parent-tag budgets were allowed then) is inserted **already closed**, on the migration day — preserving it as history rather than landing a real upgrade with a generation that immediately violates the new leaf-only invariant and can never be edited.
 
 ### Rules engine
 
