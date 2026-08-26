@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-26 v2.2        |
-| **Version**      | 2.2                    |
+| **Last Updated** | 2026-08-26 v2.3        |
+| **Version**      | 2.3                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -20,6 +20,7 @@
 |**2.0**|**2026-08-21**|**Full rewrite to match the shipped self-hosted pivot.** Versions 1.0–1.10 described a multi-tenant hosted product: Google OAuth + Drive-as-database, Postgres, an invite-only waitlist beta, AI/Claude categorization, Israeli-specific financial-instrument cards, and Phase-4 Stripe monetization. None of that was built. What shipped is single-user, self-hosted software — one operator, one `goaldy.db` file, `ADMIN_PASSWORD`-based login, no signup funnel — plus a household financial-planning simulator ("Plan") and bilingual (English/Hebrew, RTL) i18n that the old PRD never described at all. This version rewrites every feature section against the actual codebase, deletes sections describing things never built, and marks in-progress work ("Coming soon" stub pages) honestly rather than as shipped. It also fixes an internal contradiction present since v1.1: F6.2 (old) referenced an `is_income` tag flag that F4.1 (old) had already said was removed — confirmed via the schema that no such column has ever existed in the shipped app; this version does not reintroduce it.|
 |2.1|2026-08-24|F2.1: the in-app data importer shipped (Buxfer full-migration adapter, Stage 0+1; a generic, single-account CSV adapter with a column-mapping wizard and Mint/YNAB presets, Stage 2) — corrected from "Not built — deferred" to Shipped. OFX/QIF remains not built and unscoped, split out as its own row.|
 |2.2|2026-08-26|F7 (Budgets) shipped — corrected from "data model exists, UI does not" to Shipped: per-leaf-tag budget generations, in-place editing of the open generation, closed-form rollover, automatic budget-move offers when a budgeted tag gains a child or is reparented under one, trailing-average hint, and the `/budgets` page (list/grid, summary strip, per-tag history, not-budgeted section). F4.1: removed the stale description of budget fields as columns on the tag row — budgeting now lives in its own per-tag generation history, not tag columns. F6.3: corrected the dashboard income/expense classification description — it was never actually driven by any tag-level budget field; fixed to state it comes solely from the transaction's own `type`. F14.2: added budgets to the feature-highlights list (the landing page itself is not yet built; this is the source-of-truth update for whenever it is, per this repo's CLAUDE.md convention).|
+|2.3|2026-08-26|F7.7 added: direct edit/delete of any generation (open or closed) from one merged per-tag history view — a deliberate revision away from "closed history is immutable," matching Buxfer's direct budget-history management; deleting the open generation reopens the previous closed one where one exists. F7.5: the `/budgets` page gained a page-level "+ Set a budget" action and the app's standard date-horizon selector (replacing a bare date input), matching the navigation chrome convention other views (e.g. the Dashboard) already use; the global "Add" menu's long-standing disabled "Budget" placeholder is now live, opening the same per-tag view via a leaf-tag picker. F7.4: the trailing-average hint no longer has a dedicated UI slot (data still computed server-side) now that every generation is independently editable rather than only the open one — noted as an open question for a future revisit, not a removed capability.|
 
 ---
 
@@ -196,7 +197,7 @@ The old F6.2 described income/expense classification as driven by an `is_income`
 
 ### F7.1 Generations
 
-A tag's budget is not one row that gets overwritten on edit — it is a sequence of **generations**, each a budget configuration valid for a date range. Editing the amount effective immediately updates the current (open) generation in place; scheduling a change for a future date closes the current generation and opens a new one starting then. Only the currently open generation is ever edited — a closed generation is permanent history, exactly what it looked like for the period it covered.
+A tag's budget is not one row that gets overwritten on edit — it is a sequence of **generations**, each a budget configuration valid for a date range. Editing the amount effective immediately updates the current (open) generation in place; scheduling a change for a future date closes the current generation and opens a new one starting then. See F7.7 for what "editing a generation" means now that any generation — open or closed — can be revisited, not only the open one.
 
 ### F7.2 Rollover
 
@@ -213,15 +214,21 @@ If the destination tag already has its own budget, or has children of its own, t
 
 ### F7.4 Trailing Average
 
-The edit view shows an average and a small trend chart over the budget's own trailing occurrences (e.g. 12 trailing months for a monthly budget, 3 trailing years for an annual one) — not a fixed calendar window, since a fixed window means something different for every period length.
+The backend computes an average and a trend over the budget's own trailing occurrences (e.g. 12 trailing months for a monthly budget, 3 trailing years for an annual one) — not a fixed calendar window, since a fixed window means something different for every period length. The data exists at the API level; as of the direct-edit rework (F7.7) it no longer has a dedicated slot in the UI, since it was tied to editing the open generation specifically and doesn't have a clean per-row home now that every generation is independently editable — a future revisit can decide where it resurfaces.
 
 ### F7.5 The `/budgets` Page
 
-Expense and Income tabs, a summary strip (Budgeted / Actual / Available across the tab), and a choice of two layouts — a grouped list or a card grid with a circular progress indicator — toggled client-side, no new setting. A "Not budgeted" section lists leaf tags with activity but no budget, each with a quick way to set one. A per-tag history view lists every past generation for that tag, read-only except for the currently open one.
+Expense and Income tabs, a summary strip (Budgeted / Actual / Available across the tab), a choice of two layouts — a grouped list or a card grid with a circular progress indicator — toggled client-side, no new setting, and a "Not budgeted" section listing leaf tags with activity but no budget. A page-level "+ Set a budget" action next to the page title, and a reference-date selector reusing the app's standard date-horizon control (same component the Dashboard uses) — matching this repo's convention of consistent per-view navigation chrome — replace the page's original bare date input.
 
 ### F7.6 What Deleting a Budgeted Tag Does
 
 Deleting a tag that currently has an active budget warns explicitly before proceeding; deletion itself is unchanged (F4.3's existing cascade/reassign behavior) — the budget's history is removed along with the tag, it is not silently orphaned.
+
+### F7.7 Direct Editing and Deletion of Any Generation
+
+Clicking a budgeted (or not-yet-budgeted) tag's budget action opens one view listing every generation for that tag, newest-first — the single place to manage a tag's whole budget history, reachable from a table row's action, the page-level "+ Set a budget" button, or the app's global "Add" menu (which can also open it for a not-yet-chosen tag, via a leaf-tag picker).
+
+Within that view, **every generation — open or closed — can be edited or deleted**, a deliberate revision of the original "closed history is immutable" design: amount, currency, type, period, and rollover can be changed on any entry (start and end dates are never hand-edited — they stay fixed by the generation sequence; only creating a brand-new entry sets a start date). Deleting the currently open generation reopens the tag's next most recent closed generation, if one exists, so a deletion behaves like undoing the last change rather than leaving the tag abruptly unbudgeted; deleting any other (already-closed) generation simply removes it, leaving that date range with no budget coverage — the same as if it had never existed. This trades away the original point-in-time-correctness guarantee (a past period's figures can now change if its generation is edited or removed after the fact) in favor of Buxfer-style direct management of budget history.
 
 ---
 
