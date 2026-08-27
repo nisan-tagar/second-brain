@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-08-26 v2.2  |
-| **Version**      | 2.2              |
+| **Last Updated** | 2026-08-26 v2.3  |
+| **Version**      | 2.3              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -22,6 +22,7 @@
 |**2.0**|**2026-08-21**|**Full rewrite to match the shipped self-hosted pivot.** The product described in v1.0–1.9 (Google OAuth + Drive-as-database, Postgres app DB, tRPC, NextAuth, in-browser wa-sqlite/OPFS, Vercel/Upstash/Resend hosting, AI/Claude categorization, Israeli-specific financial-instrument cards, Stripe monetization, an invite-only waitlist beta) was never built. What shipped instead: a single-user, self-hosted Next.js 15 app where one server process owns exactly one SQLite file via `better-sqlite3` — no cloud dependency, no sync server, no OAuth. This version replaces nearly every section end-to-end, and documents three real, shipped subsystems the old design never mentioned: the household financial-planning "Plan" simulator, live bilingual i18n/RTL, and the Docker/CI-CD/public-demo deployment pipeline. Sections describing things that were never built (Postgres app DB, blob-queue ingest, AI categorization, Israeli instrument cards, monetization hooks) are deleted rather than marked historical — see the repo's git history for the pre-pivot design if it's ever needed for reference.|
 |2.1|2026-08-26|**Budgets (`tag_budgets`) shipped — replaces the `tags.budget_*` columns entirely.** New §4a documents the generation model (one row per budget-configuration-over-a-date-range, a partial unique index enforcing at most one open generation per tag), the leaf-only invariant enforced server-side (a budgeted tag closes its own generation the moment it gains a child), the three-way edit/schedule branch in `setBudget()`, the closed-form rollover computation, the weighted/cash-flow-filtered `Actual` sum shared with every other tag-scoped money query in the app, the trailing-average hint, and the migration's leaf-only-aware backfill of the old columns. §4's `tags` table definition had the 7 `budget_*` columns (and `budget_account_id`, an 8th, dropped without replacement per the PRD's non-goal on forecasting) removed. §4's stale claim that `budget_type` fed dashboard income/expense classification is corrected — it never did; that classification has only ever come from a transaction's own `type`.|
 |2.2|2026-08-26|§4a: documents `updateGeneration`/`deleteGeneration` — direct edit/delete of any generation (open or closed) by id, superseding the original "closed history is immutable" design. `updateGeneration` touches only amount/currency/type/period/custom_days/rollover, never `start_date`/`end_date`, so the partial-unique-index and CHECK-constraint invariants remain untouched by this change. `deleteGeneration` reopens the tag's previous closed generation when the deleted one was open (if one exists), and leaves a plain coverage gap when the deleted one was already closed — both in one transaction. New `PATCH`/`DELETE /api/tags/:id/budget/:generationId` routes.|
+|2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 
 ---
 
@@ -364,6 +365,82 @@ Undocumented in every prior version of this document — built entirely after th
 - **`.github/workflows/ci.yml`**: on every PR into `main` — parallel typecheck/lint/test/build jobs, `actionlint` validating the workflow files themselves, and a required `semver:major|minor|patch` PR label check.
 - **`.github/workflows/release.yml`**: a bot-maintained `release/next` PR accumulates the highest semver bump across merged, labeled PRs since the last tag; merging it tags `vX.Y.Z`, builds and pushes `ghcr.io/<owner>/goaldy:vX.Y.Z`/`:latest`/`:sha-<short>`, cuts a GitHub Release, verifies the image is actually pullable, and (if configured) pings a deploy hook to redeploy the public demo.
 - **Public demo**: `DEMO_MODE=true` seeds a curated, realistic fixture (`apps/web/lib/server/demo-fixture.ts` — accounts across every liquidity class, a multi-level tag tree with budgets, plan settings/members/items/account-layers, and rules — all inserted through the app's own normal functions, never raw SQL) and makes the instance read-only (every mutating request 403s except login). Live today at the URL in the root README, password `demo`.
+
+---
+
+## 11a. Mobile Shell Architecture
+
+Shipped 2026-08-26. Goaldy has no responsive design before this — the sidebar only ever
+collapsed to an icon-only "mini" mode, never a true mobile shell. This section documents
+the mechanism; the durable project rules it establishes also live in the app repo's root
+`CLAUDE.md` under "Mobile and Other Devices," since they bind all future work on the app,
+not just this feature.
+
+**The shell switch is CSS-only, not a JS mode flag.** `apps/web/app/(app)/layout.tsx` is
+a **server component** — it reads the session cookie and redirects unauthenticated users,
+so it genuinely renders on the server before any client-side JS runs. A `useIsMobile()`
+hook picking between two shells would have to guess on first render (the server has no
+viewport width) and correct itself after hydration — a visible flash of the wrong shell
+on a phone. Instead: both the existing desktop `<Sidebar>`/`<Topbar>` tree and a new
+`<MobileShell>` (drawer + mobile top bar + floating action button) render unconditionally
+from that server layout, wrapped in Tailwind's `hidden md:flex` / `flex md:hidden`
+respectively — real `display: none` (never a soft hide like `opacity-0`), so the hidden
+shell's controls are non-focusable and invisible to assistive tech, not just visually
+gone. The breakpoint is Tailwind's default `md` (768px); the app has no custom breakpoint
+config. Both shells receive the same `children`, so the CSS toggle is instant on resize
+with no re-fetch. `MobileShell` pins `direction: 'ltr'` on its own root, mirroring the
+desktop wrapper's existing pin — the whole app currently assumes LTR layout (many
+physical-direction Tailwind classes depend on it), so this preserves today's status quo
+on a surface (mobile) that never existed before, rather than introducing untested RTL
+behavior; a dedicated mobile-RTL pass is separate, larger future work.
+
+**Navigation is a hamburger drawer, not a bottom tab bar** — one ranked list covering
+every section (Dashboard, Transactions, Tags, Budgets, Rules, Plan, Reconciliation,
+Reports, Accounts), no primary-vs-demoted split. Settings is deliberately excluded from
+the drawer; it lives only in the mobile top bar's "⋮" overflow menu, one tap further than
+the drawer's contents, since it's reached far less often. A universal floating action
+button (the same global Add-menu component the desktop topbar already used, given a
+`variant="fab"` rendering) sits bottom-right on every mobile screen for quick-add from
+anywhere.
+
+**Shared full-screen-sheet primitive.** `Modal`/`ConfirmDialog` (the app's only modal
+primitive; every modal in the codebase goes through one of them) already becomes
+viewport-height-aware for the on-screen-keyboard case. This shipped alongside it: below
+768px, both render as a full-screen bottom sheet (flush to the screen edges, top corners
+only, `items-end` overlay) instead of a small centered dialog. `Modal` also gained a
+`variant?: 'sheet' | 'drawer'` prop (default `'sheet'`, zero behavior change for every
+pre-existing caller) so the same shared shell — Escape handling, focus trap, body-scroll
+lock, dialog `role`/`aria-modal`, and the existing modal-stack coordination for
+nested-modal cases — could back the hamburger drawer too, rather than a second,
+hand-rolled full-screen overlay. (A hand-rolled drawer overlay was the original design;
+it was rejected mid-implementation specifically because this repo enforces, via a
+regression test, that `Modal`/`ConfirmDialog` are the *only* place a full-screen overlay
+may be constructed — the same discipline that already prevented eleven independently
+hand-rolled modal shells from drifting on Escape/focus/z-index years earlier.) Migrating
+the app's other anchored popovers (`TagPicker`, `AccountSelector`, several table-cell
+dropdowns) onto this same primitive is deferred to each component's own future per-view
+work — this shipped scope only guarantees the primitive exists and what its contract is.
+
+**New `/accounts` list screen.** Previously, browsing accounts required the desktop
+sidebar's own account-tree panel; there was no equivalent on a screen with no sidebar.
+The new screen groups accounts by `liquidityClass` (`liquid` → `semi_liquid` →
+`illiquid` → `locked` → `liability`, matching `packages/schema/account.ts`'s
+`LiquidityClassEnum` exactly — a grouping distinct from the desktop sidebar's own
+account-tree panel, which groups by account *type* instead), each group a header with a
+colored subtotal (green/red, following the app's existing money-direction color rule);
+individual account balances are shown in the *base* currency alongside their group's
+subtotal, not each account's own native currency, since the page's entire structure is
+cross-account subtotaling — showing native currencies per row while subtotaling in base
+would read as inconsistent, not more precise. Reachable only from the mobile drawer, not
+the desktop sidebar, which already serves the same purpose there via its own tree panel.
+
+**Fixed alongside this work, unrelated to the mobile breakpoint**: `AccountSelector`'s
+dropdown clamped its horizontal position against the right edge only
+(`Math.min(rect.left, windowWidth - dropWidth - margin)`), with no lower bound — on a
+narrow viewport, or simply a trigger near the left edge with a wide dropdown, the
+expression could go negative and the panel would render partially off-screen to the
+left. Extracted into a small, unit-tested pure function
+(`components/ui/dropdown-position.ts`) since this reproduces on desktop too.
 
 ---
 

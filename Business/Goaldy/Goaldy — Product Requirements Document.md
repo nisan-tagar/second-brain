@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-26 v2.3        |
-| **Version**      | 2.3                    |
+| **Last Updated** | 2026-08-27 v2.4        |
+| **Version**      | 2.4                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -21,6 +21,7 @@
 |2.1|2026-08-24|F2.1: the in-app data importer shipped (Buxfer full-migration adapter, Stage 0+1; a generic, single-account CSV adapter with a column-mapping wizard and Mint/YNAB presets, Stage 2) — corrected from "Not built — deferred" to Shipped. OFX/QIF remains not built and unscoped, split out as its own row.|
 |2.2|2026-08-26|F7 (Budgets) shipped — corrected from "data model exists, UI does not" to Shipped: per-leaf-tag budget generations, in-place editing of the open generation, closed-form rollover, automatic budget-move offers when a budgeted tag gains a child or is reparented under one, trailing-average hint, and the `/budgets` page (list/grid, summary strip, per-tag history, not-budgeted section). F4.1: removed the stale description of budget fields as columns on the tag row — budgeting now lives in its own per-tag generation history, not tag columns. F6.3: corrected the dashboard income/expense classification description — it was never actually driven by any tag-level budget field; fixed to state it comes solely from the transaction's own `type`. F14.2: added budgets to the feature-highlights list (the landing page itself is not yet built; this is the source-of-truth update for whenever it is, per this repo's CLAUDE.md convention).|
 |2.3|2026-08-26|F7.7 added: direct edit/delete of any generation (open or closed) from one merged per-tag history view — a deliberate revision away from "closed history is immutable," matching Buxfer's direct budget-history management; deleting the open generation reopens the previous closed one where one exists. F7.5: the `/budgets` page gained a page-level "+ Set a budget" action and the app's standard date-horizon selector (replacing a bare date input), matching the navigation chrome convention other views (e.g. the Dashboard) already use; the global "Add" menu's long-standing disabled "Budget" placeholder is now live, opening the same per-tag view via a leaf-tag picker. F7.4: the trailing-average hint no longer has a dedicated UI slot (data still computed server-side) now that every generation is independently editable rather than only the open one — noted as an open question for a future revisit, not a removed capability.|
+|2.4|2026-08-27|**F17 (Mobile Experience) added — corrected from no-mobile-support to Shipped.** A responsive mobile web shell below 768px: hamburger-drawer navigation with Settings in a top-bar overflow menu, a universal floating add-menu, every modal (and the drawer itself) rendering as a full-screen sheet, a mobile-specific compact time-horizon picker, and a new Accounts list screen grouped by liquidity class. Explicitly not covered yet: per-view mobile layouts beyond the shell, RTL support on mobile, and PWA installability (all named as deferred follow-on work in F17.5). §4 Current State Summary: "Budgets screen" removed from the modeled-but-not-surfaced list (stale since F7 shipped in v2.2 — corrected in passing) and the mobile shell added to Shipped.|
 
 ---
 
@@ -389,6 +390,70 @@ A separate, longer-lived credential (sha256-hashed, compared on `Authorization: 
 
 ---
 
+## F17 — Mobile Experience
+
+Goaldy is a **responsive web app, not a native app or a wrapped hybrid** (see §3
+Non-Goals) — the self-hosted, single-Docker-container architecture has no app-store
+distribution model to build against, so "works well in any mobile browser" is the
+target. Full workflows are expected to genuinely work on a phone — tagging
+transactions, editing rules, managing budgets — not merely be legible; this is
+parity-of-capability, not graceful degradation.
+
+### F17.1 Navigation
+
+Below a 768px viewport width, the desktop sidebar is replaced by a hamburger drawer
+listing every section in one ranked list, with no bottom tab bar and no "primary few
+vs. demoted rest" split — every section gets equal footing (Dashboard, Transactions,
+Tags, Budgets, Rules, Plan, Reconciliation, Reports, Accounts). Settings is
+deliberately excluded from the drawer; it lives only in the mobile top bar's "⋮"
+overflow menu, since it's reached far less often than any drawer item. A universal
+floating action button (the same global Add-menu the desktop topbar already offers,
+covering every entity type — Account, Transaction, Goal, Rule, Tag, Budget, Import
+Statement) sits bottom-right on every mobile screen for quick-add from anywhere.
+
+### F17.2 Modals and Popovers
+
+Every modal in the app (all of them go through one shared component) renders as a
+full-screen bottom sheet below 768px instead of a small centered dialog, matching how
+mobile apps typically present forms and detail views. This same shared shell also
+backs the navigation drawer, so both inherit the same Escape-to-close, focus-trap, and
+scroll-lock behavior rather than a second, independently-built full-screen surface.
+
+### F17.3 Time-Horizon Selection
+
+The dashboard/transactions/budgets/accounts time-range picker gets a mobile-specific
+compact rendering below 768px (a one-line `‹ 📅 THIS MONTH ▾ ›` bar with a full-screen
+range-list sheet on tap) rather than the desktop's sidebar-width dropdown — the
+underlying set of selectable ranges is unchanged, no new ranges were added for mobile.
+
+### F17.4 Accounts List
+
+A new, mobile-reachable Accounts screen (not present on desktop, which already has its
+own sidebar account-tree panel serving the same purpose there) groups every account by
+liquidity class, each group showing a colored subtotal, with a persistent search field
+above the list.
+
+### F17.5 What This Does Not Yet Cover
+
+This foundation does not rebuild any individual view's own mobile layout in detail
+(Dashboard's charts, Transactions' filter bar, Rules' condition-builder form, Plan's
+simulator UI, Reconciliation's two-leg comparison cards) — that is deliberate,
+sequenced follow-on work per view, so each has a system to build against rather than
+inventing its own mobile treatment. Migrating the app's other anchored popovers
+(`TagPicker`, the account-picker dropdown, various table-cell dropdowns) onto the
+same full-screen-sheet pattern F17.2 establishes is likewise deferred to each
+component's own future work. Full mobile support for Hebrew/RTL layout is also
+deferred — the mobile shell currently renders left-to-right unconditionally, matching
+the rest of the app's current LTR-only assumption, rather than partially supporting
+RTL on some screens and not others.
+
+**Not built, and not currently planned:** a native mobile app or app-store
+distribution (see §3); PWA installability (a home-screen icon, offline support) is the
+intended future direction — no `manifest.json` or service worker exists yet, but
+nothing in the mobile UI precludes adding them later.
+
+---
+
 ## 3. Non-Goals (Explicit Exclusions)
 
 Confirmed current, replacing the old table:
@@ -411,9 +476,9 @@ Confirmed current, replacing the old table:
 
 Rather than a forward-looking phased SaaS rollout (the old §5), here is what's actually true today:
 
-**Shipped:** accounts (all liquidity classes, multi-currency), transactions (ingest, dedup, splits, labels, duplicate detection), tags (arbitrary tree), per-tag budgets with generations/rollover/trailing-average (F7), rules-based categorization, the Cashflow/Net-Worth dashboard, the Plan household simulator, notifications (event/condition log), bilingual i18n/RTL, self-host Docker deployment, versioned CI/CD releases, and a public read-only demo.
+**Shipped:** accounts (all liquidity classes, multi-currency), transactions (ingest, dedup, splits, labels, duplicate detection), tags (arbitrary tree), per-tag budgets with generations/rollover/trailing-average (F7), rules-based categorization, the Cashflow/Net-Worth dashboard, the Plan household simulator, notifications (event/condition log), bilingual i18n/RTL, self-host Docker deployment, versioned CI/CD releases, a public read-only demo, and a responsive mobile web shell (F17).
 
-**Modeled but not surfaced (data exists, UI doesn't):** Budgets screen, Reports screen, onboarding flow.
+**Modeled but not surfaced (data exists, UI doesn't):** Reports screen, onboarding flow.
 
 **Explicitly deferred, documented elsewhere:** a generic in-app data importer (`docs/features/2026-08-19-in-app-data-importer`), replacing the developer-only Buxfer CLI script.
 
