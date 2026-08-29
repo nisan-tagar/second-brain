@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-08-26 v2.3  |
-| **Version**      | 2.3              |
+| **Last Updated** | 2026-08-29 v2.4  |
+| **Version**      | 2.4              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -23,6 +23,7 @@
 |2.1|2026-08-26|**Budgets (`tag_budgets`) shipped — replaces the `tags.budget_*` columns entirely.** New §4a documents the generation model (one row per budget-configuration-over-a-date-range, a partial unique index enforcing at most one open generation per tag), the leaf-only invariant enforced server-side (a budgeted tag closes its own generation the moment it gains a child), the three-way edit/schedule branch in `setBudget()`, the closed-form rollover computation, the weighted/cash-flow-filtered `Actual` sum shared with every other tag-scoped money query in the app, the trailing-average hint, and the migration's leaf-only-aware backfill of the old columns. §4's `tags` table definition had the 7 `budget_*` columns (and `budget_account_id`, an 8th, dropped without replacement per the PRD's non-goal on forecasting) removed. §4's stale claim that `budget_type` fed dashboard income/expense classification is corrected — it never did; that classification has only ever come from a transaction's own `type`.|
 |2.2|2026-08-26|§4a: documents `updateGeneration`/`deleteGeneration` — direct edit/delete of any generation (open or closed) by id, superseding the original "closed history is immutable" design. `updateGeneration` touches only amount/currency/type/period/custom_days/rollover, never `start_date`/`end_date`, so the partial-unique-index and CHECK-constraint invariants remain untouched by this change. `deleteGeneration` reopens the tag's previous closed generation when the deleted one was open (if one exists), and leaves a plain coverage gap when the deleted one was already closed — both in one transaction. New `PATCH`/`DELETE /api/tags/:id/budget/:generationId` routes.|
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
+|2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
 
 ---
 
@@ -444,6 +445,76 @@ left. Extracted into a small, unit-tested pure function
 
 ---
 
+## 13. Goaldy.AI Architecture (Roadmap, Not Built)
+
+Technical counterpart to PRD F18. Nothing here is implemented — this documents the
+agreed design so implementation can start from settled decisions rather than
+re-litigating them.
+
+### 13.1 Why This Can't Live in `goaldy.db`
+
+§0/§5 establish the whole app around one hard invariant: one process, one file, no
+`users` table, no OAuth, no multi-tenancy. Licensing/entitlement state — "does this
+installation currently have an active Goaldy.AI subscription" — is inherently
+multi-tenant (it spans every self-hosted instance that ever subscribes), so it cannot be
+added as a table in `goaldy.db` without breaking that invariant. It has to be a second,
+separately-run system, not a new subsystem of the Next.js app.
+
+### 13.2 Licensing Service
+
+A small service, run centrally, entirely separate from anything a user self-hosts:
+
+- **Stripe** owns billing and identity — Checkout + Billing + webhooks
+  (`customer.subscription.updated`/`deleted`). No accounts system of its own.
+- One table: `license_key`, `stripe_customer_id`, `stripe_subscription_id`, `status`,
+  `entitlements` (JSON: `{chat: bool, mcp: bool}`).
+- Two endpoints: `POST /activate {license_key}` → validates against Stripe status,
+  returns a signed (Ed25519), short-lived token asserting entitlements + expiry; a
+  Stripe webhook handler flips `status` on cancellation/payment failure.
+- **This service never receives a user's financial data** — only a license key in,
+  an entitlement token out. That boundary is load-bearing for the self-hosted trust
+  story and should be stated in any future public architecture docs, not just here.
+
+### 13.3 Entitlement Verification in the Self-Hosted Instance
+
+The licensing service's public key is baked into the Docker image at build time. A new
+Settings field ("Goaldy.AI license key") calls `/activate` once; the resulting signed
+token is cached in the existing `settings` key/value store (§4 — same pattern as
+`password_hash`/`api_token_hash`, no new storage concept). Every AI/MCP-gated request
+checks that cached token's signature and expiry **locally**, with a background daily
+re-sync and a 7–14 day grace window if the licensing service is briefly unreachable.
+Constant phone-home per request was explicitly rejected: it would contradict the
+self-hosted "own your data" pitch even though the licensing service itself never touches
+that data.
+
+### 13.4 Chat Tier
+
+An in-app assistant scoped to that instance's own data, finally exercising the
+`category_source='ai'`/`ai_confidence` reserved seam (§4, §6) for LLM-assisted
+categorization, plus natural-language query, insight-to-action recommendations layered
+on the existing Plan projection engine (§8) output, a Monte Carlo–style range around that
+same projection, and a push surface built on the existing notification log (§10) rather
+than a new delivery mechanism.
+
+### 13.5 MCP Tier
+
+An MCP server exposing one instance's harmonized accounts/tags/budgets/Plan state to
+external agents. Planned to be **generated from the existing OpenAPI 3.1 surface**
+(`lib/server/openapi.ts`) rather than hand-built as a second API — the same Zod schemas
+already drive both. MCP credentials are minted through the *existing* scoped
+bearer-token mechanism (§5), not a new auth system; the licensing token from §13.3 only
+gates whether the capability is unlocked at all. Default scope is read-only; a
+write-capable scope (tag, categorize, move a budget) requires an explicit, separate
+grant — an external agent should never get unscoped write access to a ledger by default.
+
+### 13.6 Explicitly Out of Scope
+
+Tax optimization (loss-harvesting, contribution-limit tracking, RSU-vesting timing) —
+evaluated and rejected as a distinct, higher-liability product, not part of this
+architecture.
+
+---
+
 ## 12. What We Are Not Building
 
 Explicit non-goals, current as of this rewrite:
@@ -453,7 +524,7 @@ Explicit non-goals, current as of this rewrite:
 - **No multi-tenancy, no waitlist, no invite-only beta** — this is self-hosted software, not a hosted service with a signup funnel.
 - **No Postgres or any second database** — one SQLite file is the entire application database.
 - **Israeli-specific financial-instrument account types or intelligence cards** (קרן השתלמות, pension, mortgage-rate comparison) — never built; the account model is generic.
-- **No Stripe integration, no paid tiers** — removed in the pivot; there is nothing to gate.
+- **No paid tier or Stripe integration exists in the self-hosted app today.** A paid Goaldy.AI layer, and the licensing service that gates it, are planned — see §13 — and are deliberately architected as a system separate from `goaldy.db`, not a violation of this app's single-tenant model.
 - **No native mobile app.**
 - **No bank-credential proxying, no Plaid/broker integrations** — the user brings their own data via CSV, the Buxfer CLI, or the Moneyman webhook.
 - **No envelope budgeting or forced methodology** — the tag tree is whatever the user makes it.
