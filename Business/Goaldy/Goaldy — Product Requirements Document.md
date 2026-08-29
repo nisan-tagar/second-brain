@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-27 v2.4        |
-| **Version**      | 2.4                    |
+| **Last Updated** | 2026-08-29 v2.5        |
+| **Version**      | 2.5                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -22,6 +22,7 @@
 |2.2|2026-08-26|F7 (Budgets) shipped — corrected from "data model exists, UI does not" to Shipped: per-leaf-tag budget generations, in-place editing of the open generation, closed-form rollover, automatic budget-move offers when a budgeted tag gains a child or is reparented under one, trailing-average hint, and the `/budgets` page (list/grid, summary strip, per-tag history, not-budgeted section). F4.1: removed the stale description of budget fields as columns on the tag row — budgeting now lives in its own per-tag generation history, not tag columns. F6.3: corrected the dashboard income/expense classification description — it was never actually driven by any tag-level budget field; fixed to state it comes solely from the transaction's own `type`. F14.2: added budgets to the feature-highlights list (the landing page itself is not yet built; this is the source-of-truth update for whenever it is, per this repo's CLAUDE.md convention).|
 |2.3|2026-08-26|F7.7 added: direct edit/delete of any generation (open or closed) from one merged per-tag history view — a deliberate revision away from "closed history is immutable," matching Buxfer's direct budget-history management; deleting the open generation reopens the previous closed one where one exists. F7.5: the `/budgets` page gained a page-level "+ Set a budget" action and the app's standard date-horizon selector (replacing a bare date input), matching the navigation chrome convention other views (e.g. the Dashboard) already use; the global "Add" menu's long-standing disabled "Budget" placeholder is now live, opening the same per-tag view via a leaf-tag picker. F7.4: the trailing-average hint no longer has a dedicated UI slot (data still computed server-side) now that every generation is independently editable rather than only the open one — noted as an open question for a future revisit, not a removed capability.|
 |2.4|2026-08-27|**F17 (Mobile Experience) added — corrected from no-mobile-support to Shipped.** A responsive mobile web shell below 768px: hamburger-drawer navigation with Settings in a top-bar overflow menu, a universal floating add-menu, every modal (and the drawer itself) rendering as a full-screen sheet, a mobile-specific compact time-horizon picker, and a new Accounts list screen grouped by liquidity class. Explicitly not covered yet: per-view mobile layouts beyond the shell, RTL support on mobile, and PWA installability (all named as deferred follow-on work in F17.5). §4 Current State Summary: "Budgets screen" removed from the modeled-but-not-surfaced list (stale since F7 shipped in v2.2 — corrected in passing) and the mobile shell added to Shipped.|
+|2.5|2026-08-29|**F18 (Goaldy.AI) added — the first documented monetization plan for the product.** Product/marketing strategy work concluded that Goaldy stays free and self-hosted forever, with a separate opt-in paid layer (Goaldy.AI) sold as a subscription: an in-app assistant scoped to one instance's own data (categorization assist, insight-to-action recommendations against the Plan simulator, range-based risk simulation, proactive goal-drift nudges) plus a higher, MCP-enabled tier that exposes an instance's harmonized accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, etc.) — positioned as a system-of-record layer for users who already run per-institution agents/MCPs but lack any cross-account, goal-aware memory between sessions. Tax optimization was evaluated and explicitly excluded as a separate, higher-liability product. §3 Non-Goals: the blanket "no Stripe, no paid tiers" line is corrected — monetization is now planned, gated through a small externally-run licensing service (Stripe-backed, signed offline-verifiable entitlement tokens) kept structurally separate from the single-tenant self-hosted app, never touching a user's financial data. §4 Current State Summary: "monetization" removed from the never-built/no-roadmap bucket.|
 
 ---
 
@@ -454,6 +455,96 @@ nothing in the mobile UI precludes adding them later.
 
 ---
 
+## F18 — Goaldy.AI (Roadmap, not yet built)
+
+**Not built.** This section documents the product direction agreed for the first paid
+layer on top of Goaldy, arrived at through product/marketing strategy work — it is a
+roadmap commitment, not shipped software. The core app (F1–F17) stays free and
+self-hosted forever; Goaldy.AI is a separate, opt-in subscription. Nothing about
+*where a user's data lives* is ever paywalled — only optional AI compute and the MCP
+surface (F18.3) sit behind the subscription.
+
+### F18.1 Positioning
+
+Goaldy.AI is not "AI categorization bolted onto a finance app." The target user already
+runs agents against several per-institution MCP servers (brokerage, bank) — each
+accurate but stateless and siloed to one account, with no persisted goal context
+between sessions. Goaldy.AI's differentiated claim is being the **harmonized system of
+record** those per-institution tools lack: one normalized net worth (across liquidity
+classes, per F1/F6), one tag tree, one budget history, one household Plan (F8) — the
+aggregation Goaldy already does for its own UI, made queryable by any external agent.
+This is pitched as a complement to per-institution MCPs, not a replacement for them: an
+agent still calls a brokerage's own MCP for a live quote or a trade; it calls Goaldy.AI
+to know whether that trade fits the household's emergency-fund pillar or its Plan
+horizon. This positioning is only as credible as ingestion breadth — the OFX/QIF and
+SimpleFIN-bridge ingestion paths (F2.1) are treated as prerequisites for marketing this
+tier hard, not independent nice-to-haves.
+
+### F18.2 Chat Tier
+
+An in-app assistant scoped strictly to one instance's own data. Planned capabilities:
+
+- LLM-assisted categorization for anything the rules engine (F5.1) doesn't match — the
+  schema's reserved `category_source='ai'`/`ai_confidence` fields (F5.2) are the seam
+  this would finally use.
+- Natural-language "ask your ledger" queries against that instance's own data.
+- **Insight-to-action recommendations**: the Plan simulator (F8.6) already computes what
+  a shortfall needs (required monthly savings, the first danger year) — surface it as a
+  concrete move ("shift $400/mo to your emergency-fund pillar") instead of leaving the
+  arithmetic to the user.
+- **Range-based risk simulation**: today's Plan projects one deterministic line; a
+  Monte Carlo–style band around it (sequence-of-returns risk, a probability of hitting
+  a danger year rather than a single point estimate) computed locally against the
+  existing projection engine, no new data source.
+- **Proactive goal-drift nudges**: F9's event/condition log already runs a 24h check but
+  is currently pull-only (read on demand); push a notification the moment a goal or
+  budget visibly drifts, rather than waiting for the dashboard to be opened.
+- AI-narrated Plan scenarios ("what if I front-load university savings by 2 years?").
+
+**Explicitly excluded from scope:** tax optimization (loss-harvesting, contribution-limit
+tracking, RSU-vesting timing). A real request from this audience, but judged a distinct,
+higher-liability product — not on this roadmap.
+
+### F18.3 Chat + MCP Tier
+
+Everything in F18.2, plus an MCP server exposing that instance's harmonized
+accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, and
+similar). Reuses the existing OpenAPI 3.1 surface (`lib/server/openapi.ts`) as the
+source the MCP tool/resource definitions are generated from, rather than a new
+hand-built API. Write-capable MCP scopes (tag, categorize, move a budget) are opt-in
+and separate from a default read-only scope — an external agent should never get
+unscoped write access to a ledger by default.
+
+### F18.4 Hosted Instance (optional add-on)
+
+A managed, backed-up hosted instance for people who want the self-hosted ownership
+story without running Docker themselves, bundled with a Goaldy.AI subscription.
+
+### F18.5 Licensing and Entitlement Gating
+
+The self-hosted app is deliberately single-tenant with no OAuth (§3) — licensing state
+cannot live inside `goaldy.db`. Planned architecture:
+
+1. **Stripe** owns billing and identity for the paid layer; no separate accounts system.
+2. A small, separately-operated licensing service holds one table (license key →
+   entitlements) and issues a signed, short-lived, offline-verifiable token per
+   activation. It never receives a user's financial data — only entitlement state.
+3. A self-hosted instance activates once via a license key entered in Settings, then
+   verifies that signed token locally on every gated request (public key baked into the
+   Docker image), with a grace window if the licensing service is briefly unreachable —
+   no constant phone-home, which would undercut the self-hosted trust model.
+4. MCP credentials themselves continue to be minted by the existing scoped bearer-token
+   mechanism (F13.2/F16.2); the licensing token only gates whether that capability is
+   unlocked, rather than introducing a second auth system.
+
+### F18.6 Community/Config Sharing (low-effort, privacy-safe)
+
+A shareable rule-set and tag-tree template exchange — config only, never transaction
+data — addressing the empty-tag-tree problem (F4.4) and giving the product a community
+surface without ever centralizing a user's ledger.
+
+---
+
 ## 3. Non-Goals (Explicit Exclusions)
 
 Confirmed current, replacing the old table:
@@ -463,7 +554,7 @@ Confirmed current, replacing the old table:
 - No multi-tenancy, no waitlist, no invite-only beta, no signup funnel of any kind.
 - No Postgres or any database beyond the one SQLite file.
 - No Israeli-specific financial-instrument account types or cards.
-- No Stripe integration, no paid tiers — there is nothing to monetize a self-hosted tool's own instance against.
+- No paid tier, Stripe integration, or AI feature exists **in the self-hosted app today** — see F18 for the planned Goaldy.AI subscription layer, which is roadmap, not shipped, and is architected as a separate service rather than something built into `goaldy.db`.
 - No native mobile app.
 - No bank-credential proxying or broker integrations — bring your own data via CSV, the Buxfer CLI, or the Moneyman webhook.
 - No envelope budgeting or forced methodology.
@@ -482,7 +573,9 @@ Rather than a forward-looking phased SaaS rollout (the old §5), here is what's 
 
 **Explicitly deferred, documented elsewhere:** a generic in-app data importer (`docs/features/2026-08-19-in-app-data-importer`), replacing the developer-only Buxfer CLI script.
 
-**Never built, and not on any current roadmap:** AI categorization, Israeli-specific financial-instrument cards, OAuth/multi-tenancy, monetization.
+**Never built, and not on any current roadmap:** Israeli-specific financial-instrument cards, OAuth/multi-tenancy.
+
+**Planned, not yet built:** Goaldy.AI (F18) — an opt-in paid layer (in-app AI assistant, an MCP server for external agents, an optional hosted instance) gated by a separately-run licensing service. AI categorization (F5.2) is part of this plan rather than a dead schema seam.
 
 ---
 
