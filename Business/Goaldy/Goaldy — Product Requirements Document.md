@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-29 v2.5        |
-| **Version**      | 2.5                    |
+| **Last Updated** | 2026-08-29 v2.6        |
+| **Version**      | 2.6                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -23,6 +23,7 @@
 |2.3|2026-08-26|F7.7 added: direct edit/delete of any generation (open or closed) from one merged per-tag history view — a deliberate revision away from "closed history is immutable," matching Buxfer's direct budget-history management; deleting the open generation reopens the previous closed one where one exists. F7.5: the `/budgets` page gained a page-level "+ Set a budget" action and the app's standard date-horizon selector (replacing a bare date input), matching the navigation chrome convention other views (e.g. the Dashboard) already use; the global "Add" menu's long-standing disabled "Budget" placeholder is now live, opening the same per-tag view via a leaf-tag picker. F7.4: the trailing-average hint no longer has a dedicated UI slot (data still computed server-side) now that every generation is independently editable rather than only the open one — noted as an open question for a future revisit, not a removed capability.|
 |2.4|2026-08-27|**F17 (Mobile Experience) added — corrected from no-mobile-support to Shipped.** A responsive mobile web shell below 768px: hamburger-drawer navigation with Settings in a top-bar overflow menu, a universal floating add-menu, every modal (and the drawer itself) rendering as a full-screen sheet, a mobile-specific compact time-horizon picker, and a new Accounts list screen grouped by liquidity class. Explicitly not covered yet: per-view mobile layouts beyond the shell, RTL support on mobile, and PWA installability (all named as deferred follow-on work in F17.5). §4 Current State Summary: "Budgets screen" removed from the modeled-but-not-surfaced list (stale since F7 shipped in v2.2 — corrected in passing) and the mobile shell added to Shipped.|
 |2.5|2026-08-29|**F18 (Goaldy.AI) added — the first documented monetization plan for the product.** Product/marketing strategy work concluded that Goaldy stays free and self-hosted forever, with a separate opt-in paid layer (Goaldy.AI) sold as a subscription: an in-app assistant scoped to one instance's own data (categorization assist, insight-to-action recommendations against the Plan simulator, range-based risk simulation, proactive goal-drift nudges) plus a higher, MCP-enabled tier that exposes an instance's harmonized accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, etc.) — positioned as a system-of-record layer for users who already run per-institution agents/MCPs but lack any cross-account, goal-aware memory between sessions. Tax optimization was evaluated and explicitly excluded as a separate, higher-liability product. §3 Non-Goals: the blanket "no Stripe, no paid tiers" line is corrected — monetization is now planned, gated through a small externally-run licensing service (Stripe-backed, signed offline-verifiable entitlement tokens) kept structurally separate from the single-tenant self-hosted app, never touching a user's financial data. §4 Current State Summary: "monetization" removed from the never-built/no-roadmap bucket.|
+|2.6|2026-08-29|**Free-tier roadmap items added across F2, F4, F6, F10, F13, F15, F17**, carrying the same product/marketing strategy session's conclusions for what ships ahead of (and independent of) Goaldy.AI: F2.1/F2.4 — OFX/QIF import, a SimpleFIN bridge, and automated transfer peer-matching all marked Planned (the ingestion items are also named prerequisites for F18.1's "harmonizes every account" MCP pitch to hold up). F4.4 — a localized starter tag tree and a config-only rule/tag-tree template exchange (cross-referenced to F18.6) planned against the empty-tag-tree problem. F6.4 (new) — a recurring/upcoming-transaction preview, planned as an extension of the existing rules engine. F10 and F15.2 — both stubs explicitly flagged as launch blockers to close before any public GTM push, not just open gaps. F13.2 — a planned feedback/issue-reporting channel, needed because the app is closed-source and therefore carries no GitHub Issues tab by default. F13.3 — a planned one-click encrypted scheduled backup, replacing the manual `docker compose cp` step. F17 — PWA installability reclassified from "not currently planned" to Planned.|
 
 ---
 
@@ -96,8 +97,9 @@ Create, edit, archive; link an `account_number` for integration matching (e.g. M
 |Manual entry|Shipped|
 |Buxfer CSV/TSV migration (`scripts/migrate-buxfer.ts`)|Shipped, but developer-only CLI — requires shell access to the container, not reachable from the running app|
 |In-app data importer — Buxfer full-migration adapter and a generic, single-account CSV adapter with a column-mapping wizard (presets for Mint/YNAB)|Shipped (`docs/features/2026-08-19-in-app-data-importer`) — an in-app wizard (Import Statement) replaces the old dev-only CLI path for both cases|
-|OFX/QIF in-app upload|**Not built** — named as a future stage of the in-app importer, no design doc yet|
-|SimpleFIN, bank-specific parsers|Not built|
+|OFX/QIF in-app upload|**Planned** — the next stage of the in-app importer, no design doc yet. Widens the importable-bank surface beyond CSV/Buxfer, and is treated as a prerequisite for the Goaldy.AI MCP tier's "harmonizes every account" claim (F18.1), not just an adoption nice-to-have.|
+|SimpleFIN bridge|**Planned** — an optional bridge to an existing bank aggregator (SimpleFIN), not Goaldy holding bank credentials itself (§3 Non-Goals still rules out Goaldy proxying broker/bank credentials directly). Lowers the switching-cost objection for someone currently on Monarch/YNAB.|
+|Other bank-specific parsers|Not built, not currently planned|
 
 There is no encrypted-blob relay, no server-side queue with a TTL, no in-browser SQLite receiving decrypted payloads. Everything lands directly in the one server-owned `goaldy.db` via the same idempotent insert path (`ingestTransactions()`).
 
@@ -112,6 +114,8 @@ Idempotent re-import: `import_hash = SHA-256(account_id | date | amount | descri
 ### F2.4 Transfers
 
 A transaction's `type` can be set to `transfer`, with `transfer_source_account_id`/`transfer_dest_account_id` populated. Transfers are excluded from all income/expense reporting but included in per-account balance history and (optionally) account-level in/out charts. Transfer detection today is a matter of the ingesting integration or the user setting `type='transfer'` directly — there is no separate automated peer-matching/confirm-and-delete review queue built yet.
+
+**Planned:** automated transfer detection — a peer-matching pass (candidate pairs by amount/date proximity across accounts) surfaced as a confirm-and-delete review queue, matching the automatic behavior every listed competitor (Buxfer, Monarch, YNAB) already ships. Today's manual step is real daily friction for anyone with 4+ accounts.
 
 ---
 
@@ -159,7 +163,9 @@ Tree view, rename, recolor, delete (cascade-safe — descendant transactions are
 
 ### F4.4 No Default Tag Stack Yet
 
-There is no out-of-the-box bilingual starter tag tree seeded on first boot — a new install starts with an empty tag tree (the public demo's tag tree, by contrast, is a hand-authored fixture for demo purposes only, not a default new-install experience). A localized OOTB stack remains a reasonable future feature, not something currently shipped.
+There is no out-of-the-box bilingual starter tag tree seeded on first boot — a new install starts with an empty tag tree (the public demo's tag tree, by contrast, is a hand-authored fixture for demo purposes only, not a default new-install experience).
+
+**Planned:** a localized (EN/HE) starter tag tree, fully editable, seeded on first boot — an empty canvas is a bigger day-1 drop-off risk than a bad default. Also planned, on the same "don't start from nothing" theme: a shareable rule-set/tag-tree template exchange (config only, never transaction data — see F18.6) so a new install can adopt a community starter pack instead of only the built-in default.
 
 ---
 
@@ -190,6 +196,10 @@ Net worth trend over time and a liquidity-class breakdown, reading from account 
 ### F6.3 Correction from earlier drafts
 
 The old F6.2 described income/expense classification as driven by an `is_income` tag flag. No such flag exists (F4.1) — income vs. expense classification for dashboard purposes comes solely from the transaction's own `type` (`income`/`expense`); no tag-level field is involved. (A budget's own expense/income type, F7, is a separate per-budget setting scoped to the Budgets page — it does not feed the dashboard's classification.)
+
+### F6.4 Recurring/Upcoming Preview (Planned)
+
+**Not built.** A forecasted view of upcoming recurring charges/income (matching the "upcoming" surfacing Monarch and YNAB both ship), built as a natural extension of the existing rules engine (F5.1) rather than new ingestion infrastructure — a recurrence pattern is detected from a rule/description match already flowing through the pipeline, not a new data source.
 
 ---
 
@@ -287,7 +297,7 @@ An append-only event/condition log (not a pluggable multi-channel email/WhatsApp
 
 ## F10 — Reports
 
-**Stub.** The Reports nav page currently renders "Coming soon." The Dashboard (F6) is the actual reporting surface today; a dedicated Reports section (tag comparison, exportable charts, custom date-range reports) remains a real gap, not a built feature.
+**Stub, now a launch blocker for the planned public GTM push.** The Reports nav page currently renders "Coming soon." The Dashboard (F6) is the actual reporting surface today; a dedicated Reports section (tag comparison, exportable charts, custom date-range reports) remains a real gap, not a built feature. Closing this is prioritized ahead of any public launch — a visible "Coming soon" nav item on a self-hosted-software forum (Hacker News, r/selfhosted) reads as unfinished software to exactly the launch-day audience Goaldy is targeting.
 
 ---
 
@@ -330,12 +340,14 @@ Base currency, optional display-currency override, language (en/he).
 - **Password**: change it; `GOALDY_RESET_PASSWORD` (an environment variable, not a UI flow) forces a reset and clears sessions if the operator is locked out.
 - **API token**: view/rotate via `POST /api/token/rotate`, used for `Authorization: Bearer` integrations (Moneyman, scripts).
 - No Google Drive connection settings — there is nothing to connect; the database is a local file.
+- **Planned:** a "Send Feedback" / "Report an Issue" link. The application code is closed-source (no public repo to carry a GitHub Issues tab), so a code-free public repo (issues/discussions only, no source) is planned as the feedback channel, linked here, from the Docker image description, and from the landing page footer — otherwise a publicly distributed Docker image with no visible way to report a bug reads as abandoned rather than private.
 
 ### F13.3 Data Management
 
 - **Backup**: a single file copy (`docker compose cp goaldy:/data/goaldy.db ./backup.db`) — no export format to design, the real file *is* the export.
 - **Clear data**: deleting/replacing `goaldy.db` wipes every table, including auth state, and logs everyone out; the next boot reseeds the password from `ADMIN_PASSWORD` as if freshly installed. A short list of UI-only preferences (locale, sidebar panel state) live outside the DB in cookies/`localStorage` and survive a clear — none of it is financial data.
 - No Postgres-backed "delete account" flow exists or is needed — deleting the one file *is* deleting the account, by construction.
+- **Planned:** a one-click scheduled backup feature — encrypting `goaldy.db` and copying it to a second location on a schedule, in-app, rather than requiring the operator to remember a manual `docker compose cp`. Losing the one file that *is* their financial history is a self-hoster's core fear; this turns "own your data" into "own your data, safely."
 
 ---
 
@@ -371,7 +383,7 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 
 ### F15.2 Onboarding
 
-**Stub.** The onboarding route currently renders a placeholder ("5-step onboarding — coming soon"). A first-run experience — currency/locale selection, an initial import prompt — remains real future work, not something already delivered; do not assume any of the old OAuth-era onboarding steps (Drive initialization, invite-token validation) apply, since none of the systems they depended on exist.
+**Stub, now a launch blocker for the planned public GTM push.** The onboarding route currently renders a placeholder ("5-step onboarding — coming soon"). A first-run experience — currency/locale selection, the planned starter tag tree (F4.4) as an option, an initial import prompt — remains real future work, not something already delivered; do not assume any of the old OAuth-era onboarding steps (Drive initialization, invite-token validation) apply, since none of the systems they depended on exist. A cold self-hoster's first five minutes is the entire first impression a public launch gets — this ships before any Show HN / r/selfhosted post, alongside F10.
 
 ### F15.3 Password Recovery
 
@@ -449,9 +461,12 @@ the rest of the app's current LTR-only assumption, rather than partially support
 RTL on some screens and not others.
 
 **Not built, and not currently planned:** a native mobile app or app-store
-distribution (see §3); PWA installability (a home-screen icon, offline support) is the
-intended future direction — no `manifest.json` or service worker exists yet, but
-nothing in the mobile UI precludes adding them later.
+distribution (see §3).
+
+**Planned:** PWA installability (a home-screen icon, offline support) — no
+`manifest.json` or service worker exists yet, and nothing in the mobile UI precludes
+adding them; a cheap, high-visibility signal that the mobile experience (F17) isn't a
+half-finished afterthought.
 
 ---
 
@@ -569,13 +584,15 @@ Rather than a forward-looking phased SaaS rollout (the old §5), here is what's 
 
 **Shipped:** accounts (all liquidity classes, multi-currency), transactions (ingest, dedup, splits, labels, duplicate detection), tags (arbitrary tree), per-tag budgets with generations/rollover/trailing-average (F7), rules-based categorization, the Cashflow/Net-Worth dashboard, the Plan household simulator, notifications (event/condition log), bilingual i18n/RTL, self-host Docker deployment, versioned CI/CD releases, a public read-only demo, and a responsive mobile web shell (F17).
 
-**Modeled but not surfaced (data exists, UI doesn't):** Reports screen, onboarding flow.
+**Modeled but not surfaced (data exists, UI doesn't):** Reports screen (F10), onboarding flow (F15.2) — both now flagged as launch blockers for the planned public GTM push, not just open gaps.
 
 **Explicitly deferred, documented elsewhere:** a generic in-app data importer (`docs/features/2026-08-19-in-app-data-importer`), replacing the developer-only Buxfer CLI script.
 
 **Never built, and not on any current roadmap:** Israeli-specific financial-instrument cards, OAuth/multi-tenancy.
 
-**Planned, not yet built:** Goaldy.AI (F18) — an opt-in paid layer (in-app AI assistant, an MCP server for external agents, an optional hosted instance) gated by a separately-run licensing service. AI categorization (F5.2) is part of this plan rather than a dead schema seam.
+**Planned, not yet built (free tier):** OFX/QIF import and a SimpleFIN bridge (F2.1), automated transfer detection (F2.4), a localized starter tag tree and config-only template exchange (F4.4), a recurring/upcoming-transaction preview (F6.4), a public feedback/issue-reporting channel (F13.2), a one-click encrypted scheduled backup (F13.3), and PWA installability (F17.5).
+
+**Planned, not yet built (paid):** Goaldy.AI (F18) — an opt-in paid layer (in-app AI assistant, an MCP server for external agents, an optional hosted instance) gated by a separately-run licensing service. AI categorization (F5.2) is part of this plan rather than a dead schema seam.
 
 ---
 
