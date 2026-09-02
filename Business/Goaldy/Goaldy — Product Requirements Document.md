@@ -375,8 +375,10 @@ registered in `IMPORT_ADAPTERS` — the wizard needs no change).
 **One wizard, two entry modes.** The same modal serves both, differing only in whether it
 opens on the platform picker:
 
-- **Statement mode** — from an account view or the transaction table's upload action. The
-  target account is locked; no platform picker.
+- **Statement mode** — the target account is locked; no platform picker. **Built but not yet
+  reachable from the UI:** the entry points that open it (an account view, and the transaction
+  table's upload action) are Stage 4 work and are not wired yet. Until they are, every user
+  path lands in migration mode.
 - **Migration mode** — from Settings → Data → "Import Financial Data", or the Add menu.
   Starts on the format picker.
 
