@@ -351,7 +351,7 @@ CREATE TABLE settings (
 **Key design decisions:**
 
 - Single user → no user table
-- `import_hash` prevents duplicates (SHA-256 of date + amount + description)
+- `import_hash` prevents duplicates — SHA-256 of `account_id | date | amount | description | externalId?`, stored as a **BLOB** with a UNIQUE index (see §4.4b for the three dedup modes and the null-hash rule)
 - `type = 'transfer'` is atomic, no splits
 - `tag_id` is nullable for transfers
 - Budget config lives on tags (not separate table)
@@ -569,6 +569,78 @@ router.post("/", (req, res) => {
 - Dedup is idempotent: re-posting an overlapping date range creates zero duplicates.
 - The batch runs inside one `db.transaction()` — 200 rows insert in a few ms and either all validation-passing rows commit or the process errors cleanly.
 - Auth is the standard bearer token or session (see §4.5), not a bespoke API key check.
+
+### 4.4a File Import — the adapter registry
+
+`POST /api/transactions` (§4.4) is the ingest primitive for structured data that is already
+in Goaldy's shape. **File import is a layer above it**, because a bank's CSV, an Excel
+workbook or a QIF file has to be turned into that shape first — and the user has to see what
+will happen before it does.
+
+**One contract, five adapters.** `lib/server/importers/` holds an `IMPORT_ADAPTERS` registry
+keyed by id (`csv`, `xlsx`, `qif`, `json`, `buxfer`). Each adapter declares the files it
+needs and whether it needs column mapping, and exposes a single `parse()`:
+
+```typescript
+interface ImportAdapter {
+  id: string
+  label: string
+  requiredFiles: { key: string; label: string; accept: string }[]
+  needsMapping: boolean
+  budgetsFile?: { key: string; label: string; accept: string }   // Buxfer only
+  parse(files, config?): ParsedImport | Promise<ParsedImport>
+}
+```
+
+**Adapters never touch the database.** `parse()` is pure: bytes in, a `ParsedImport` out
+(normalized accounts, tags, transactions and optional budgets, all keyed by *external* keys,
+never database ids). That is what makes every adapter unit-testable without a DB, and it is
+why adding OFX later is a self-contained module rather than a change to the pipeline.
+
+**Three stages, in order:**
+
+| Stage | Function | Touches the DB? |
+|---|---|---|
+| `parse` | adapter-specific, bytes → `ParsedImport` | No |
+| `planImport` | resolves accounts/tags against existing rows, computes duplicates, builds a ≤20-row preview | Reads only |
+| `commitImport` | creates accounts and tags, ingests transactions, sets budgets | Writes |
+
+The preview the user approves is `planImport`'s output; `commitImport` then performs it.
+Preview and commit share their file-parsing and budget-merge code paths deliberately — any
+divergence between them means the preview lies about what the commit will do.
+
+**Shared column mapping.** `csv`, `xlsx` and `json` all funnel through one `mapRowsToTransactions`
+(`row-mapper.ts`), so there is exactly one place that decides what a "date" or "amount" column
+means. XLSX flattens its first *visible* sheet to a string matrix first; JSON addresses fields
+by name (a column may carry a `sourceKey` when the document's field names differ from the
+role names).
+
+**Format detection** sniffs content before extension — a bank that names its Excel export
+`.csv` is common enough that trusting the extension misroutes the file. Detection returns
+`null` rather than guessing when the shape is ambiguous, and the wizard asks.
+
+### 4.4b Dedup modes
+
+`import_hash` is `sha256(account_id | date | amount | description | externalId?)`, stored as a
+**BLOB** with a UNIQUE index. The insert carries `ON CONFLICT(import_hash) DO NOTHING`, and a
+dedup hit is detected via `info.changes === 0`. The conflict is **targeted** deliberately:
+untargeted, it swallowed every unique violation on the table, so a duplicate primary key
+silently dropped a distinct transaction and was miscounted as a dedup skip.
+
+| Mode | Behaviour |
+|---|---|
+| `skip` (default) | A colliding row is dropped. Every pre-existing caller gets this. |
+| `all` | Every row is inserted regardless of collision. |
+| `review` | A colliding row is re-inserted **only if its hash appears in the request's `keepHashes` allow-list**. |
+
+`review` exists because the preview shows a sample, not the whole file. Resolving it as "any
+tick means `all`" would bypass the hash check for duplicates the user never saw — on a large
+re-import, silently double-counting history. The allow-list scopes the bypass to exactly the
+rows the user ticked.
+
+A deliberately re-admitted row is stored with a **null** hash, because the column is UNIQUE
+and the same hash cannot be written twice. The original row keeps its hash, so future imports
+continue to dedup normally.
 
 ### 4.5 Auth Middleware (session cookie OR bearer token)
 

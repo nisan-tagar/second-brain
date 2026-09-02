@@ -358,27 +358,57 @@ exception: **navigation resets, drill-down preserves.**
 
 ### F7 — Import
 
-**Supported formats:**
+**Supported formats (all shipped):**
 
-- CSV (Buxfer, Israeli banks, generic via column mapping)
-- OFX (standard financial format)
-- Goaldy native (JSON, for API ingest)
+| Format | Notes |
+|---|---|
+| CSV | Israeli banks and generic, via interactive column mapping |
+| XLSX | First *visible* sheet, flattened through the same column mapping as CSV |
+| QIF | Tagged-line format; bracketed `L[Account]` transfers synthesise the second leg |
+| JSON | An array of objects; a column may name its own `sourceKey` when the document's field names differ from the roles (`txn_date`, `amt`, …) |
+| Buxfer | Three-file export (accounts + tags + transactions), plus an optional `budgets.csv` |
+
+**Not built:** OFX. It was listed here through Phase 0 planning but no adapter exists;
+adding one is a self-contained follow-up (a new module under `lib/server/importers/`
+registered in `IMPORT_ADAPTERS` — the wizard needs no change).
+
+**One wizard, two entry modes.** The same modal serves both, differing only in whether it
+opens on the platform picker:
+
+- **Statement mode** — from an account view or the transaction table's upload action. The
+  target account is locked; no platform picker.
+- **Migration mode** — from Settings → Data → "Import Financial Data", or the Add menu.
+  Starts on the format picker.
 
 **Import flow:**
 
-1. Pick file → auto-detect format
-2. If CSV: interactive column mapping (saved per bank)
-3. Preview first 10 rows
-4. Dedup check: show how many are new vs duplicates
-5. Run rules engine: show proposed auto-tags for untagged transactions
-6. Run transfer detection: flag likely internal transfers
-7. User confirms → write all to SQLite
+1. Pick file → auto-detect format from content, not extension (a bank that names its Excel
+   export `.csv` is common enough that trusting the extension misroutes it). Detection
+   returns "unsure" rather than guessing, and the user picks.
+2. If the format needs mapping: interactive column mapping.
+3. If a `budgets.csv` is attached: budget settings step (period, currency, start date).
+4. Preview up to 20 resolved rows, with duplicates marked, plus counts of accounts and tags
+   to be created and budgets to be set.
+5. User confirms → written to SQLite.
 
-**Dedup:**
+**Dedup — three modes:**
 
-- Transactions hashed by: date + amount + description + account_id
-- Re-importing same file = zero duplicates
-- Overlapping imports handled gracefully
+- **Skip duplicates** (default) — a row matching an existing transaction is left out.
+- **Import everything** — insert every row regardless. Useful for re-importing a corrected
+  file.
+- **Let me review** — duplicates shown in the preview get a checkbox; **only the rows the
+  user ticks are re-admitted**, identified by hash. Because the preview shows a sample
+  rather than the whole file, it states how many duplicates lie beyond it, so ticking a few
+  boxes never implies having reviewed them all.
+
+**Dedup key:** `sha256(account_id | date | amount | description | externalId?)`, stored on
+the row as `import_hash`. Re-importing the same file is a no-op. A row deliberately
+re-admitted is stored with a null hash, since the column is UNIQUE — the original still
+dedups against future imports.
+
+**Budget import.** A Buxfer `budgets.csv` sets budgets by tag path. Budgets are leaf-only:
+a parent-tag row (which real Buxfer exports contain) is warned and skipped rather than
+failing the import.
 
 ### F8 — Settings
 
@@ -391,9 +421,13 @@ exception: **navigation resets, drill-down preserves.**
 
 **Data:**
 
+- Import financial data (opens the import wizard in migration mode — see F7)
 - Export database (download SQLite file for backup)
 - Export transactions (CSV of all transactions)
-- Reset app (delete everything, confirm 3x)
+- **Delete all financial data** — wipes the 12 financial tables (transactions, accounts,
+  tags, budgets, rules, plan items, notifications and their join tables) while preserving
+  `settings`, `sessions`, `plan_settings` and `meta`, so the install stays logged in and
+  configured. Requires an explicit typed confirmation.
 
 **Rules:**
 
@@ -631,7 +665,7 @@ docker cp goaldy:/data/goaldy.db ./backup.db
 - ✅ Accounts (all types)
 - ✅ Transactions (create, edit, delete, transfer detection)
 - ✅ Tags (hierarchy, budget config)
-- ✅ Import (CSV, OFX, Buxfer)
+- ✅ Import (CSV, XLSX, QIF, JSON, Buxfer — **not** OFX; see F7)
 - ✅ Rules (merchant pattern → tag)
 - ✅ Dashboards (expense, income, net worth)
 - ✅ REST API (all resources, all verbs) with bearer-token auth
