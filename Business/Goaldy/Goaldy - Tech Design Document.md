@@ -642,6 +642,77 @@ A deliberately re-admitted row is stored with a **null** hash, because the colum
 and the same hash cannot be written twice. The original row keeps its hash, so future imports
 continue to dedup normally.
 
+### 4.4c Export — two profiles, one serializer registry
+
+`lib/server/exporters/` mirrors the importer registry's shape. Each entity module exports
+`columns` (natural-key names, never an internal id) and `rows(filters)`, calling the same
+`lib/server/queries/*` the UI uses — **no exporter writes SQL of its own**, for the same
+reason no adapter does: money math lives in one place.
+
+`GET /api/export?entity&format&profile` serves both profiles.
+
+- **`portable`** — natural keys, lossy by construction. An account is referenced by name, a
+  tag by its slash path. This is what a human reads, diffs, or hands to another tool.
+- **`backup`** — `buildBackupDocument()`, every financial table verbatim via `SELECT *`. This
+  is the one place `SELECT *` is correct: a backup must carry whatever columns the table has,
+  and pinning a list would silently drop any column added later.
+
+`backup` is valid only as `entity=all&format=json` (a partial backup is a restore that cannot
+succeed), and `entity=all` is JSON-only. The route enforces both with a 400, and the modal
+cannot construct either combination.
+
+BLOBs are hex-encoded, detected via `PRAGMA table_info` rather than a hardcoded column name.
+`settings`, `sessions` and `meta` are excluded from `BACKUP_TABLES` — they hold the password
+hash, API token and live session of the exporting machine. **A backup is a financial artifact,
+not a credential dump.**
+
+`LEDGER_TABLES` is `BACKUP_TABLES` minus `plan_settings`, and exists solely for the "is this
+ledger empty?" question. `plan_settings` is a lazily-created singleton that `delete-all`
+preserves, so counting it there would report "not empty" forever and make restore permanently
+unreachable.
+
+### 4.4d Restore — deliberately not an import adapter
+
+Restore is a separate pipeline, not an adapter. An adapter mints new ids and matches by name;
+byte-exactness forbids both. `preflightRestore` decides, `restoreBackup` executes.
+
+**Preflight refuses rather than half-applies:**
+
+| Reason | Status |
+|---|---|
+| `malformed` — not an object, no `tables`, a table name outside `BACKUP_TABLES`, or a row that is not an object | 400 |
+| `schema-mismatch` — the document's `schemaVersion` differs from `meta.schema_version` | 400 |
+| `ledger-not-empty` — counted over `LEDGER_TABLES` | 409, which the UI turns into an explicit wipe-and-restore offer |
+
+**Restore runs as one transaction** with `PRAGMA defer_foreign_keys = ON` (not
+`foreign_keys = OFF`, which is an outside-transaction control and would let a `DROP` cascade
+silently). `tags.parent_id` is self-referential, so a child may legitimately appear before its
+parent. `PRAGMA foreign_key_check` runs before commit; any violation throws and rolls the
+whole thing back.
+
+**Both table AND column names from the document are whitelisted** against the live schema.
+SQLite cannot bind an identifier, so a row key reaches the SQL string verbatim — an
+unvalidated one can close the column list early and append arbitrary SQL. That was a real
+vulnerability during development: a crafted document read the install's password hash out of
+`settings` and wrote it into a restored ledger row, crossing the exact boundary the excluded-
+tables rule exists to hold. Authentication is not the control here; a restore endpoint exists
+to accept a file the user obtained elsewhere.
+
+`plan_settings` restores with `INSERT OR REPLACE` because the wipe preserves it; every other
+table uses a plain `INSERT`, where a collision is a real error that should roll back.
+
+### 4.4e The round-trip benchmark
+
+`lib/server/restore/roundtrip.test.ts` is the acceptance gate for the guarantee, and CI-gating
+since CI already runs `pnpm test`. Seed an adversarial ledger → export → delete-all → restore →
+**table-by-table full-row diff**. Never a spot-check: a spot-check is how a dropped split
+weight or a mangled hash slips through.
+
+It also asserts, by reading `goaldy.sql` directly, that every `CREATE TABLE` is either in
+`BACKUP_TABLES` or one of the three deliberately excluded tables. Without that, the diff
+polices its own list — a table dropped from `BACKUP_TABLES` disappears from both sides of the
+comparison and the gate stays green.
+
 ### 4.5 Auth Middleware (session cookie OR bearer token)
 
 ```typescript

@@ -375,10 +375,9 @@ registered in `IMPORT_ADAPTERS` — the wizard needs no change).
 **One wizard, two entry modes.** The same modal serves both, differing only in whether it
 opens on the platform picker:
 
-- **Statement mode** — the target account is locked; no platform picker. **Built but not yet
-  reachable from the UI:** the entry points that open it (an account view, and the transaction
-  table's upload action) are Stage 4 work and are not wired yet. Until they are, every user
-  path lands in migration mode.
+- **Statement mode** — the target account is locked; no platform picker. Opened by the
+  transaction table's upload action, both on a standalone `/transactions` view and on an
+  account view (where the account is pre-locked).
 - **Migration mode** — from Settings → Data → "Import Financial Data", or the Add menu.
   Starts on the format picker.
 
@@ -423,13 +422,54 @@ failing the import.
 
 **Data:**
 
-- Import financial data (opens the import wizard in migration mode — see F7)
-- Export database (download SQLite file for backup)
-- Export transactions (CSV of all transactions)
+- **Import financial data** — opens the import wizard in migration mode (see F7).
+- **Export financial data** — see F9.
+- **Restore from backup** — see F9.
 - **Delete all financial data** — wipes the 12 financial tables (transactions, accounts,
   tags, budgets, rules, plan items, notifications and their join tables) while preserving
   `settings`, `sessions`, `plan_settings` and `meta`, so the install stays logged in and
   configured. Requires an explicit typed confirmation.
+
+
+### F9 — Export, Backup and Restore
+
+**Two export profiles, and the difference matters.** They are presented as two distinct
+actions with their own descriptions, never a dropdown of equals, so the distinction is made
+at the point of choice rather than discovered during a recovery:
+
+| Profile | What it is | Restorable? |
+|---|---|---|
+| **Portable** | Human-readable. Natural keys only — an account is referenced by name, a tag by its slash path. No internal ids, no join tables. | **No** |
+| **Backup** | Every financial table verbatim, including ids, `import_hash`, `created_at`/`updated_at`. | **Yes** |
+
+**Export modal** (Settings → Data → Export Financial Data, and the transaction table's
+download action). Tabs: Transactions · Accounts · Tags · Budgets · Goals · Rules · All data.
+Per-tab CSV or JSON. The Transactions tab reuses the same account, tag and horizon controls
+the table itself uses, and opening it from the table seeds those filters with exactly what
+the table is currently showing.
+
+"All data" is JSON-only — a single CSV cannot represent seven differently-shaped entities —
+and additionally carries household members and account pillar assignments, which have no tab
+of their own but are needed for goals and the plan projection to mean anything on re-import.
+
+**Byte-exact backup and restore is a product guarantee, not a best effort.** Export a backup,
+delete everything, restore: every row of every financial table comes back identical, ids and
+timestamps included. A CI-gating benchmark asserts this with a table-by-table full-row diff
+against a deliberately hostile ledger — two accounts sharing a name, split weights, a
+four-level tag path, both legs of a transfer, Hebrew text, a BLOB hash beside a null one.
+This is the foundation future backup features build on.
+
+**Restore** (Settings → Data) refuses rather than half-applies. It rejects a document whose
+schema version differs from the running one, a malformed document, and a portable copy
+(which is not restorable by design). If the ledger is not empty it returns a conflict and
+offers wipe-and-restore as an explicit, confirmed choice. Any failure mid-restore rolls back
+entirely — a partly-restored ledger is worse than a refused one, because the user cannot tell
+what is missing.
+
+**Portable round trips are lossless for what they carry.** Budgets restore their full
+generation history, including generations that ended early. Goals, rules, household members
+and pillar assignments are exported but cannot yet be re-imported; the importer names what it
+could not apply rather than dropping it silently.
 
 **Rules:**
 
