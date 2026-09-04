@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-04 v3.0        |
-| **Version**      | 3.0                    |
+| **Last Updated** | 2026-09-04 v3.1        |
+| **Version**      | 3.1                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -28,6 +28,7 @@
 |2.8|2026-09-04|**New F15.5 and F15.6.** F15.5: the default-credential bootstrap must force a graduation — first login on the bootstrap credential routes into a non-dismissible, server-enforced setup step (real name/email + a server-validated strong password) before any other part of the app is reachable; closes the "shipped with a known default password" risk ahead of public distribution. F15.6: full Settings "Users" UX — list/add/disable/remove/reset-password, a self-lockout guardrail preventing the last active member from disabling/removing themselves, and a "logged in as" attribution surface. Both promoted from one-line mentions to full requirements, matching `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.1 in the app repo.|
 |**2.9**|**2026-09-04**|**F15.5 replaced: `ADMIN_PASSWORD` and "first password wins" removed entirely, not hardened.** Goaldy now ships with no users and no default credential of any kind; a one-time setup token (printed to container logs) gates a first-boot wizard that collects a cosmetic `workspace_name` label (e.g. "Tagar Family") plus the first real user, then becomes permanently unreachable. Closes an unauthenticated-setup race that a bare empty-users-table design would otherwise open on any network-reachable (i.e. any public-VPS) deployment. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.2 in the app repo.|
 |3.0|2026-09-04|**F15.5 gains an explicit public-demo exception.** Removing `ADMIN_PASSWORD` in v2.9 would silently break the public Render demo (F14), which logs in with a fixed, published password today. That behavior is kept — deliberately and narrowly — because the demo is simultaneously read-only and rebuilt from empty on every release, so nothing persists; it is explicitly called out as not a precedent for real self-hosted deployments, which have no fixed-credential mechanism at all. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.3 in the app repo.|
+|**3.1**|**2026-09-04**|**New F15.7 (MFA) and F15.8 (password recovery ladder); F15.3 marked superseded.** F15.7: opt-in per-user TOTP (chosen over WebAuthn specifically because it has no secure-context/stable-domain precondition self-hosted deployments can't guarantee), hashed one-time recovery codes, WebAuthn documented as a later step once TLS is the assumed default. F15.8 replaces the single-tier `GOALDY_RESET_PASSWORD`-only recovery story with a ladder: another logged-in household member first (zero infra), optional self-configured SMTP second (off by default), `GOALDY_RESET_PASSWORD` extended to target a user by email and clear their MFA third. Explicitly excludes any Goaldy-operated recovery service, consistent with the free/no-liability self-hosted framing. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.4 in the app repo.|
 
 ---
 
@@ -398,7 +399,7 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 
 ### F15.3 Password Recovery
 
-`GOALDY_RESET_PASSWORD`, set as an environment variable and the container restarted: force-resets the password and clears all sessions, applied exactly once per value so it's safe to leave set without repeatedly logging the operator out. This remains the only recovery path until password-reset-by-email is built as separate future work (it requires an SMTP/mail-provider dependency this design deliberately doesn't take on yet).
+**Superseded by F15.8's three-tier ladder** now that household multi-login exists — a single-password app only ever had the one path below, but a household of named identities has better options first. `GOALDY_RESET_PASSWORD`, set as an environment variable and the container restarted, remains the last-resort tier: force-resets a named user's password and clears their sessions, applied exactly once per value so it's safe to leave set without repeatedly logging the operator out.
 
 ### F15.4 Login Hardening (design, not yet built)
 
@@ -430,6 +431,25 @@ A household is not a single identity — see F15.1. The Settings page gets a **U
 - **"Logged in as {name}"** is surfaced in the topbar/account menu (and the mobile shell's equivalent) — the first visible payoff of having named identities at all, and the seed for future "who did this" attribution in import history and any future audit log.
 
 Full UX detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo.
+
+### F15.7 Multi-Factor Authentication (design, not yet built)
+
+**TOTP first, not WebAuthn/passkeys** — a deliberate call based on what self-hosted deployments actually look like, not a simplicity shortcut. WebAuthn requires a secure context bound to a stable domain; a self-hosted instance is routinely reached at a bare IP or mid-setup on a self-signed cert, which WebAuthn can't operate under at all. TOTP (the standard 6-digit-code authenticator-app method) has no such precondition.
+
+- **Opt-in per household member**, from Settings — not mandatory. A solo self-hoster's risk profile differs from the "stranger on a public VPS" scenario the rest of this security work targets; forcing MFA on everyone adds friction the common case doesn't warrant. Worth revisiting as mandatory if Goaldy ever gains a multi-household or paid-tier context (F18) where that changes.
+- Setup shows a QR code (generated locally, never via a hosted API) and issues **10 one-time recovery codes**, shown once — the first line of defense for a lost device, ahead of anything in F15.8's password-recovery ladder.
+- Login gains a second step — a 6-digit code or an unused recovery code — whenever MFA is enabled for that identity.
+- **WebAuthn/passkeys are the deliberate next step**, once a stable domain with valid TLS is the assumed default deployment shape (a direct consequence of F15.4's reverse-proxy/TLS requirement actually landing) rather than aspirational guidance — not attempted this pass.
+
+### F15.8 Password (and MFA) Recovery — a three-tier ladder (design, not yet built)
+
+Self-hosting has no central party who can verify identity and hand back access, so "we'll email you a link" can't be assumed to work — replaced here with a ladder, cheapest and most-available option first:
+
+1. **Another logged-in household member resets it** (F15.6's "Reset password" action) — the primary answer for the common case, costing nothing beyond having a second person in the household set up. This is the direct payoff of choosing named household identities over one shared password.
+2. **Optional self-configured SMTP, off by default.** A self-hoster who wants a real "Forgot password?" email flow enters their own mail-relay credentials into Settings; only then does that link appear on the login screen. Unconfigured, nothing changes — no dependency is forced on anyone who hasn't opted in.
+3. **`GOALDY_RESET_PASSWORD`, extended** (F15.3) — the host-level last resort for total lockout (no other household member, no SMTP configured): now targets a specific user by email, and clears that user's MFA enrollment in the same step, since leaving an MFA lockout behind a fixed password lockout would be a worse outcome than the original problem.
+
+**Deliberately excluded: any Goaldy-operated password-reset or support channel.** That would reintroduce the cloud dependency and support liability the self-hosted, "free, no strings attached, no liability" positioning exists to avoid. Every tier above keeps recovery entirely within the self-hoster's own infrastructure.
 
 ---
 
