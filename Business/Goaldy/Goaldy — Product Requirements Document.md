@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-29 v2.6        |
-| **Version**      | 2.6                    |
+| **Last Updated** | 2026-09-04 v2.7        |
+| **Version**      | 2.7                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -24,6 +24,7 @@
 |2.4|2026-08-27|**F17 (Mobile Experience) added — corrected from no-mobile-support to Shipped.** A responsive mobile web shell below 768px: hamburger-drawer navigation with Settings in a top-bar overflow menu, a universal floating add-menu, every modal (and the drawer itself) rendering as a full-screen sheet, a mobile-specific compact time-horizon picker, and a new Accounts list screen grouped by liquidity class. Explicitly not covered yet: per-view mobile layouts beyond the shell, RTL support on mobile, and PWA installability (all named as deferred follow-on work in F17.5). §4 Current State Summary: "Budgets screen" removed from the modeled-but-not-surfaced list (stale since F7 shipped in v2.2 — corrected in passing) and the mobile shell added to Shipped.|
 |2.5|2026-08-29|**F18 (Goaldy.AI) added — the first documented monetization plan for the product.** Product/marketing strategy work concluded that Goaldy stays free and self-hosted forever, with a separate opt-in paid layer (Goaldy.AI) sold as a subscription: an in-app assistant scoped to one instance's own data (categorization assist, insight-to-action recommendations against the Plan simulator, range-based risk simulation, proactive goal-drift nudges) plus a higher, MCP-enabled tier that exposes an instance's harmonized accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, etc.) — positioned as a system-of-record layer for users who already run per-institution agents/MCPs but lack any cross-account, goal-aware memory between sessions. Tax optimization was evaluated and explicitly excluded as a separate, higher-liability product. §3 Non-Goals: the blanket "no Stripe, no paid tiers" line is corrected — monetization is now planned, gated through a small externally-run licensing service (Stripe-backed, signed offline-verifiable entitlement tokens) kept structurally separate from the single-tenant self-hosted app, never touching a user's financial data. §4 Current State Summary: "monetization" removed from the never-built/no-roadmap bucket.|
 |2.6|2026-08-29|**Free-tier roadmap items added across F2, F4, F6, F10, F13, F15, F17**, carrying the same product/marketing strategy session's conclusions for what ships ahead of (and independent of) Goaldy.AI: F2.1/F2.4 — OFX/QIF import, a SimpleFIN bridge, and automated transfer peer-matching all marked Planned (the ingestion items are also named prerequisites for F18.1's "harmonizes every account" MCP pitch to hold up). F4.4 — a localized starter tag tree and a config-only rule/tag-tree template exchange (cross-referenced to F18.6) planned against the empty-tag-tree problem. F6.4 (new) — a recurring/upcoming-transaction preview, planned as an extension of the existing rules engine. F10 and F15.2 — both stubs explicitly flagged as launch blockers to close before any public GTM push, not just open gaps. F13.2 — a planned feedback/issue-reporting channel, needed because the app is closed-source and therefore carries no GitHub Issues tab by default. F13.3 — a planned one-click encrypted scheduled backup, replacing the manual `docker compose cp` step. F17 — PWA installability reclassified from "not currently planned" to Planned.|
+|**2.7**|**2026-09-04**|**F15/F16 rewritten (design, not yet built): login hardening + household multi-login.** Prompted by a pre-public-launch security assessment. F15.1 adds named per-household-member identities (email + password login, `disabled_at` per-identity revocation, attribution in logs/UI) — explicitly not multi-tenancy: every identity sees the exact same shared ledger, no data isolation between household members. Email is a login identifier only in this pass, not a verified channel (no password-reset-by-email yet). New F15.4 documents the login-hardening gaps found (no brute-force protection, no security headers, no documented TLS requirement) as pre-launch blockers. F16.1/F16.2 updated: sessions now tied to an identity (so revocation is per-person), the shared API bearer token stays single deployment-wide (not split per-user).|
 
 ---
 
@@ -379,7 +380,14 @@ Replaces the old OAuth-based F15 entirely.
 
 ### F15.1 Auth Model
 
-No third-party identity provider. Two equal-trust paths: a browser session cookie, or a bearer API token for machine clients. `ADMIN_PASSWORD` (an environment variable) seeds the login password on first boot; if unset, the first password successfully submitted at the login screen becomes the password going forward.
+No third-party identity provider. Two equal-trust paths: a browser session cookie, or a bearer API token for machine clients.
+
+**v2.7 (design, not yet built): household multi-login.** Goaldy is still single-tenant — one deployment, one shared ledger — but a household is often more than one person (a couple, a family), and a single shared password is bad credential hygiene: it can't be revoked for one person without locking out everyone, it gets shared over text/notes apps because rotating it is a coordination problem, and there's no way to tell who did what. v2.7 adds **named identities that all have full, identical access to the same ledger** — this is emphatically not multi-tenancy or data isolation between household members; everyone continues to see every account, transaction, budget, and plan. What's new is:
+
+- **Login by email + password**, one identity per household member, instead of one shared password for the whole deployment. Email is used as the login identifier and for "who's logged in" display — it is **not** a verified channel in this iteration (no password-reset email, no notifications sent to it yet); `ADMIN_PASSWORD` still seeds the first/bootstrap identity's password on first boot, and if unset, the first password successfully submitted at the login screen becomes that identity's password.
+- **Individual revocation** — disable one member's login without touching anyone else's password.
+- **Attribution** — "who imported this," "who deleted that transaction" becomes answerable in logs and eventually in-app, because there's more than one identity to attribute an action to.
+- The shared API bearer token (F16.2) is **not** split per-user — it remains one deployment-wide credential for machine integrations, since every logged-in person already has identical data access regardless of which credential a request carries.
 
 ### F15.2 Onboarding
 
@@ -387,7 +395,11 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 
 ### F15.3 Password Recovery
 
-`GOALDY_RESET_PASSWORD`, set as an environment variable and the container restarted: force-resets the password and clears all sessions, applied exactly once per value so it's safe to leave set without repeatedly logging the operator out.
+`GOALDY_RESET_PASSWORD`, set as an environment variable and the container restarted: force-resets the password and clears all sessions, applied exactly once per value so it's safe to leave set without repeatedly logging the operator out. This remains the only recovery path until password-reset-by-email is built as separate future work (it requires an SMTP/mail-provider dependency this design deliberately doesn't take on yet).
+
+### F15.4 Login Hardening (design, not yet built)
+
+A pre-public-launch security assessment found **no brute-force protection whatsoever** on the login endpoint — unlimited password attempts, no lockout, no rate limiting. Before Goaldy is distributed for self-hosting on public VPS providers, F15 requires: per-identity rate limiting and progressive lockout on failed logins, session-ID rotation on every login (mitigates session fixation), an idle session timeout in addition to the 30-day absolute expiry, timing-safe comparison of the API bearer token's hash (replacing a plain `===` string compare), and app-wide security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) — none of which exist today. See `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo for the full design. The deploy docs must also state plainly that a reverse proxy terminating TLS is required for any non-localhost deployment — today's `docker compose up` exposes port 3000 directly with no TLS guidance at all.
 
 ---
 
@@ -395,11 +407,11 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 
 ### F16.1 Session Storage
 
-An httpOnly `session` cookie backed by a row in a `sessions` table, 30-day expiry. No JWT, no third-party token to refresh, no separate multi-device single-session-invalidation logic — a single-operator instance has no concept of "another user's device" to guard against.
+An httpOnly `session` cookie backed by a row in a `sessions` table, 30-day expiry, now with an added idle timeout (F15.4). Each session row is tied to the identity that created it (F15.1) — logging out or disabling one household member's identity invalidates only their sessions, not the whole household's. No JWT, no third-party token to refresh.
 
 ### F16.2 API Tokens
 
-A separate, longer-lived credential (sha256-hashed, compared on `Authorization: Bearer`) for integrations that shouldn't hold a browser session — this is the mechanism the Moneyman webhook and any script use.
+A separate, longer-lived credential (sha256-hashed, compared via timing-safe comparison on `Authorization: Bearer`) for integrations that shouldn't hold a browser session — this is the mechanism the Moneyman webhook and any script use. One shared token per deployment, not per household member (F15.1).
 
 ---
 

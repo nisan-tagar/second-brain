@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-08-29 v2.4  |
-| **Version**      | 2.4              |
+| **Last Updated** | 2026-09-04 v2.5  |
+| **Version**      | 2.5              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -24,6 +24,7 @@
 |2.2|2026-08-26|§4a: documents `updateGeneration`/`deleteGeneration` — direct edit/delete of any generation (open or closed) by id, superseding the original "closed history is immutable" design. `updateGeneration` touches only amount/currency/type/period/custom_days/rollover, never `start_date`/`end_date`, so the partial-unique-index and CHECK-constraint invariants remain untouched by this change. `deleteGeneration` reopens the tag's previous closed generation when the deleted one was open (if one exists), and leaves a plain coverage gap when the deleted one was already closed — both in one transaction. New `PATCH`/`DELETE /api/tags/:id/budget/:generationId` routes.|
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
+|**2.5**|**2026-09-04**|**§5 rewritten: security hardening + household multi-login (design, not yet built).** Prompted by a security assessment ahead of public self-host distribution (see `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo). Two changes, deliberately scoped together: (1) **login hardening** — per-identity rate limiting/lockout on failed logins, session-ID rotation on login, an idle timeout in addition to the 30-day absolute TTL, timing-safe bearer-token comparison (`crypto.timingSafeEqual` replacing `===` on the sha256 digest), and mandatory security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) — none of this existed before. (2) **household multi-login** — a new `users` table (`id`, `email` UNIQUE, `name`, `password_hash`, `disabled_at`) replaces the single `settings.password_hash` key; `sessions` gains a `user_id` FK for per-person "log out everywhere" and audit attribution ("who did this" in logs and a "logged in as" UI surface). **Explicitly not multi-tenancy**: `goaldy.db` remains single-ledger — every household member sees the same accounts/transactions, so no query in `lib/server/queries/*` needs `user_id` scoping and none is added. `email` is captured as a **login identifier only** in this iteration, not a verified channel — no SMTP dependency, no password-reset-by-email yet; `GOALDY_RESET_PASSWORD` remains the recovery path. The shared `Authorization: Bearer` API token stays a single deployment-wide credential (a machine credential for household infra, not a person) — not made per-user. `plan_members` (§8) is a distinct, pre-existing concept (age-labels for plan projections) and is not merged with `users`.|
 
 ---
 
@@ -289,12 +290,36 @@ meta (key TEXT PRIMARY KEY, value TEXT)  -- schema_version, and last_write_at (t
 
 ## 5. Auth Model
 
-No OAuth, no external identity provider, no `users` table. Two equal-trust authentication paths (`apps/web/lib/server/auth.ts`):
+No OAuth, no external identity provider. **Still single-tenant, single-ledger** — `goaldy.db` holds one household's financial data, full stop. What changed in v2.5 is *who can authenticate as a member of that household*, not what they can see once in.
 
-- **Browser**: an httpOnly `session` cookie, backed by a row in `sessions` (30-day expiry, random 32-byte hex id).
-- **Machine clients**: `Authorization: Bearer <token>`, compared via sha256 against `settings.api_token_hash`. Used by the Moneyman webhook integration and any script hitting the REST API directly.
+### 5.1 Identities — `users` table (design, not yet built)
 
-**Bootstrap** (`ensureReady()`, memoized once per process): on first boot, generates an API token (from the `API_TOKEN` env var, or a random one logged once) and seeds the password hash from `ADMIN_PASSWORD` if set. If `ADMIN_PASSWORD` is unset, the **first successful password submitted at login becomes the password** — a bootstrap-via-first-login fallback. `GOALDY_RESET_PASSWORD` forces a password reset and clears all sessions, applied exactly once per value (tracked by a hash marker, so leaving the env var set doesn't repeatedly wipe sessions).
+Replaces the single `settings.password_hash` key with a `users` table: `id`, `email` (UNIQUE, the login identifier), `name` (display name — "logged in as" UI, audit/log attribution), `password_hash` (bcrypt), `disabled_at` (nullable — revoke one member without touching anyone else's credential), `created_at`.
+
+**Deliberately not multi-tenancy.** Every household member sees the exact same accounts, transactions, budgets, and plan — nothing in `lib/server/queries/*` gains a `user_id` filter, and none should ever be added under this design; that would be a different, much larger feature with its own IDOR/row-isolation risk this design explicitly avoids. The only things scoped per-user are **identity, credentials, sessions, and attribution** — not data.
+
+`email` is captured as a **login identifier only** in this iteration, not a verified channel: no SMTP dependency, no verification loop, no password-reset-by-email. `GOALDY_RESET_PASSWORD` (below) remains the sole recovery path until a mail-sending capability is deliberately added as separate future work (it would also enable notifications/digests — the reason to capture the field now rather than retrofit it later).
+
+`plan_members` (§8) is a **distinct, pre-existing concept** — birth-year labels used to trigger AGE-based plan projections — and is not merged with `users`; a plan member is not necessarily someone who logs in, and vice versa.
+
+The shared `Authorization: Bearer` token (below) stays a **single deployment-wide credential**, not per-user — it authenticates household infra/integrations (Moneyman, scripts), not a person, and every logged-in person already sees the same data regardless of which credential reaches it.
+
+### 5.2 Authentication paths (`apps/web/lib/server/auth.ts`)
+
+- **Browser**: an httpOnly `session` cookie, backed by a row in `sessions` — now carrying a `user_id` FK (was anonymous). 30-day absolute expiry **plus a shorter idle timeout** (new — sessions with no activity for the idle window expire even inside the 30-day window). Session ID rotates on every successful login (new — mitigates session fixation).
+- **Machine clients**: `Authorization: Bearer <token>`, compared against `settings.api_token_hash`. The digest comparison moves from `===` to `crypto.timingSafeEqual` (new — the prior string-equality compare on a public sha256 digest was a low-severity timing side-channel, cheap to close).
+
+### 5.3 Login hardening (new)
+
+Prompted by a pre-public-launch security assessment (`docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo) — the single biggest gap found was **zero brute-force protection**: unlimited password attempts against `/api/session`, no lockout, no delay. v2.5 adds, per-identity (not per-deployment, so one member's mistyped password doesn't lock out the household):
+
+- Rate limiting + progressive lockout on failed logins against a given email.
+- Mandatory security response headers app-wide (currently entirely absent): CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`.
+- Documentation that a reverse proxy terminating TLS is **required**, not optional, for any non-localhost deployment — `docker-compose.yml` binding `3000:3000` directly with no TLS story is a real gap the deploy docs must close.
+
+### 5.4 Bootstrap and recovery
+
+`ensureReady()` (`apps/web/lib/server/auth.ts`, memoized once per process): on first boot, generates an API token (from the `API_TOKEN` env var, or a random one logged once) and seeds the first user's password hash from `ADMIN_PASSWORD` if set. If `ADMIN_PASSWORD` is unset, the **first successful password submitted at login becomes the password** for that bootstrap identity — a bootstrap-via-first-login fallback, preserved from v2.4. `GOALDY_RESET_PASSWORD` forces a password reset (scoped to the bootstrap/first user unless the design is extended to name a target email) and clears all sessions, applied exactly once per value (tracked by a hash marker, so leaving the env var set doesn't repeatedly wipe sessions).
 
 `DEMO_MODE=true` (used only by the public demo, §11) additionally seeds a curated fixture on first boot, and refuses to run if the database already has accounts it didn't create.
 
