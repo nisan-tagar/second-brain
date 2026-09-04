@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-04 v2.9        |
-| **Version**      | 2.9                    |
+| **Last Updated** | 2026-09-04 v3.0        |
+| **Version**      | 3.0                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -27,6 +27,7 @@
 |**2.7**|**2026-09-04**|**F15/F16 rewritten (design, not yet built): login hardening + household multi-login.** Prompted by a pre-public-launch security assessment. F15.1 adds named per-household-member identities (email + password login, `disabled_at` per-identity revocation, attribution in logs/UI) — explicitly not multi-tenancy: every identity sees the exact same shared ledger, no data isolation between household members. Email is a login identifier only in this pass, not a verified channel (no password-reset-by-email yet). New F15.4 documents the login-hardening gaps found (no brute-force protection, no security headers, no documented TLS requirement) as pre-launch blockers. F16.1/F16.2 updated: sessions now tied to an identity (so revocation is per-person), the shared API bearer token stays single deployment-wide (not split per-user).|
 |2.8|2026-09-04|**New F15.5 and F15.6.** F15.5: the default-credential bootstrap must force a graduation — first login on the bootstrap credential routes into a non-dismissible, server-enforced setup step (real name/email + a server-validated strong password) before any other part of the app is reachable; closes the "shipped with a known default password" risk ahead of public distribution. F15.6: full Settings "Users" UX — list/add/disable/remove/reset-password, a self-lockout guardrail preventing the last active member from disabling/removing themselves, and a "logged in as" attribution surface. Both promoted from one-line mentions to full requirements, matching `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.1 in the app repo.|
 |**2.9**|**2026-09-04**|**F15.5 replaced: `ADMIN_PASSWORD` and "first password wins" removed entirely, not hardened.** Goaldy now ships with no users and no default credential of any kind; a one-time setup token (printed to container logs) gates a first-boot wizard that collects a cosmetic `workspace_name` label (e.g. "Tagar Family") plus the first real user, then becomes permanently unreachable. Closes an unauthenticated-setup race that a bare empty-users-table design would otherwise open on any network-reachable (i.e. any public-VPS) deployment. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.2 in the app repo.|
+|3.0|2026-09-04|**F15.5 gains an explicit public-demo exception.** Removing `ADMIN_PASSWORD` in v2.9 would silently break the public Render demo (F14), which logs in with a fixed, published password today. That behavior is kept — deliberately and narrowly — because the demo is simultaneously read-only and rebuilt from empty on every release, so nothing persists; it is explicitly called out as not a precedent for real self-hosted deployments, which have no fixed-credential mechanism at all. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.3 in the app repo.|
 
 ---
 
@@ -413,6 +414,8 @@ A pre-public-launch security assessment found **no brute-force protection whatso
 - Once the first user exists, the setup wizard is **permanently and completely unreachable** — every subsequent household member is added only through the in-app Users screen (F15.6) by an already-authenticated member.
 - Password strength is checked server-side (minimum length + composition/strength-score rule, checked against a small local common-password list) — this app is explicitly scriptable via its documented REST API, so a client-side-only check is not a real control.
 - The workspace label is cosmetic (no data-isolation meaning — see F15.1's non-goal on multi-tenancy), but it's a genuinely nice touch: "Tagar Family" beats a generic app shell on a login screen, and it costs nothing beyond a `settings` string.
+
+**Scoped exception — the public demo.** The public read-only demo deployment (F14, Render) logs in with a fixed, published password today, and that stays true: it is a deliberate, narrow carve-out justified only by the demo being simultaneously read-only and rebuilt from empty on every release, so nothing a visitor does or discovers ever persists. It is **not** a precedent for a real self-hosted deployment, which never has any fixed or published credential under this design.
 
 ### F15.6 User Management (Settings)
 
