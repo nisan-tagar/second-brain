@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-04 v3.1        |
-| **Version**      | 3.1                    |
+| **Last Updated** | 2026-09-04 v3.2        |
+| **Version**      | 3.2                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -29,6 +29,7 @@
 |**2.9**|**2026-09-04**|**F15.5 replaced: `ADMIN_PASSWORD` and "first password wins" removed entirely, not hardened.** Goaldy now ships with no users and no default credential of any kind; a one-time setup token (printed to container logs) gates a first-boot wizard that collects a cosmetic `workspace_name` label (e.g. "Tagar Family") plus the first real user, then becomes permanently unreachable. Closes an unauthenticated-setup race that a bare empty-users-table design would otherwise open on any network-reachable (i.e. any public-VPS) deployment. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.2 in the app repo.|
 |3.0|2026-09-04|**F15.5 gains an explicit public-demo exception.** Removing `ADMIN_PASSWORD` in v2.9 would silently break the public Render demo (F14), which logs in with a fixed, published password today. That behavior is kept — deliberately and narrowly — because the demo is simultaneously read-only and rebuilt from empty on every release, so nothing persists; it is explicitly called out as not a precedent for real self-hosted deployments, which have no fixed-credential mechanism at all. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.3 in the app repo.|
 |**3.1**|**2026-09-04**|**New F15.7 (MFA) and F15.8 (password recovery ladder); F15.3 marked superseded.** F15.7: opt-in per-user TOTP (chosen over WebAuthn specifically because it has no secure-context/stable-domain precondition self-hosted deployments can't guarantee), hashed one-time recovery codes, WebAuthn documented as a later step once TLS is the assumed default. F15.8 replaces the single-tier `GOALDY_RESET_PASSWORD`-only recovery story with a ladder: another logged-in household member first (zero infra), optional self-configured SMTP second (off by default), `GOALDY_RESET_PASSWORD` extended to target a user by email and clear their MFA third. Explicitly excludes any Goaldy-operated recovery service, consistent with the free/no-liability self-hosted framing. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.4 in the app repo.|
+|**3.2**|**2026-09-04**|**F15.4/F15.5/F15.7/F15.8 flipped from "design, not yet built" to shipped** — the full auth rewrite (Phases 1–7 of `docs/superpowers/plans/2026-09-04-security-hardening-household-auth.md`) landed: no default credential, per-identity rate limiting/lockout, session rotation + idle timeout, household user management, encrypted-at-rest TOTP MFA, and all three password-recovery tiers. Also corrected two stale `ADMIN_PASSWORD` references (F15.1's inline description, F13.3's "clear data" behavior) that contradicted the shipped design. **New F14.4 "Security, as a Differentiator"** — adds a real, shipped-features-only security section to the landing page's structure (F14.2), between feature highlights and "Try it": six specific, traceable-to-code proof points (no default credential, brute-force protection, household multi-login, TOTP MFA, the full recovery ladder, no cloud dependency in the auth path) plus explicit tone guidance (specific mechanisms named, not compliance-checklist jargon or fear-mongering) — written because the security work is now substantial and true enough to be a genuine differentiator, not filler.|
 
 ---
 
@@ -350,7 +351,7 @@ Base currency, optional display-currency override, language (en/he).
 ### F13.3 Data Management
 
 - **Backup**: a single file copy (`docker compose cp goaldy:/data/goaldy.db ./backup.db`) — no export format to design, the real file *is* the export.
-- **Clear data**: deleting/replacing `goaldy.db` wipes every table, including auth state, and logs everyone out; the next boot reseeds the password from `ADMIN_PASSWORD` as if freshly installed. A short list of UI-only preferences (locale, sidebar panel state) live outside the DB in cookies/`localStorage` and survive a clear — none of it is financial data.
+- **Clear data**: deleting/replacing `goaldy.db` wipes every table, including every household member's identity, and logs everyone out; the next boot starts from an empty household exactly like a fresh install, printing a new one-time setup token (F15.5). A short list of UI-only preferences (locale, sidebar panel state) live outside the DB in cookies/`localStorage` and survive a clear — none of it is financial data.
 - No Postgres-backed "delete account" flow exists or is needed — deleting the one file *is* deleting the account, by construction.
 - **Planned:** a one-click scheduled backup feature — encrypting `goaldy.db` and copying it to a second location on a schedule, in-app, rather than requiring the operator to remember a manual `docker compose cp`. Losing the one file that *is* their financial history is a self-hoster's core fear; this turns "own your data" into "own your data, safely."
 
@@ -366,11 +367,28 @@ A single static marketing page (GitHub Pages), not a signup gate. There is nothi
 
 ### F14.2 Structure
 
-Nav (logo, live-demo link, GitHub link) → hero (self-hosted pitch, primary CTA to the demo) → problem framing (your data on someone else's server) → feature highlights (net worth across liquidity classes, per-tag budgets with rollover, plan ahead of expenses, rules-based categorization) → "Try it" (demo link, read-only/resets-on-release note) → "Self-host it" (`docker compose up -d` snippet, link to the full README) → footer (GitHub repo, `/api/docs`).
+Nav (logo, live-demo link, GitHub link) → hero (self-hosted pitch, primary CTA to the demo) → problem framing (your data on someone else's server) → feature highlights (net worth across liquidity classes, per-tag budgets with rollover, plan ahead of expenses, rules-based categorization) → **security, as a differentiator (F14.4)** → "Try it" (demo link, read-only/resets-on-release note) → "Self-host it" (`docker compose up -d` snippet, link to the full README) → footer (GitHub repo, `/api/docs`).
 
-As of this writing the landing page has no built artifact yet — the highlights list above is this document's source of truth for what a built landing page should claim, per this repo's CLAUDE.md convention that landing-page copy traces back to this section.
+As of this writing the landing page has no built artifact yet — this section (and F14.4) is this document's source of truth for what a built landing page should claim, per this repo's CLAUDE.md convention that landing-page copy traces back to this section.
 
 No pricing section, no waitlist form, no sign-in on the landing page itself — none of that applies to self-hosted software.
+
+### F14.4 Security, as a Differentiator
+
+Most self-hosted finance tools either skip auth hardening entirely ("it's on your LAN, who cares") or bolt on a single shared password and call it done. Goaldy's household-auth work (F15.4–F15.8, all shipped — `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md`) is real enough to be a landing-page talking point on its own merits, not marketing gloss over a stub. Every claim below is a shipped feature, not a roadmap item — that distinction matters enough to state explicitly on the page itself (a "planned" badge, or similar, on anything not yet true), since a self-hoster trusting their financial data to this software deserves an accurate picture, not the best-case one.
+
+**The pitch, in one line:** *No default password. No cloud dependency in the auth path. Built to survive being run by strangers on the open internet — because that's exactly what self-hosting is.*
+
+Proof points, each traceable to a shipped file:
+
+- **No default credential, ever.** Most self-hosted software ships with an admin password you're supposed to remember to change (and plenty of breaches happen because someone didn't). Goaldy has no such password to forget: the app is unusable until you complete setup with a token only you can read, from your own container's logs.
+- **Real brute-force protection.** Login attempts are rate-limited and lock out progressively — not something bolted on later, built in from the start, and applied identically whether the attacker is guessing a real household member's email or a made-up one, so there's no way to fingerprint which accounts exist.
+- **A household, not a single login.** Add every family member as their own identity with their own password — revoke one without resetting everyone else's, and see who did what in the ledger.
+- **Two-factor authentication**, the same TOTP standard as your bank — works with Google Authenticator, Authy, 1Password, or any compatible app, with one-time backup codes if you lose your device. The secret itself is encrypted at rest, not just hashed.
+- **You're never locked out.** Forgot a password? Another household member fixes it in Settings. Nobody else around? Turn on your own email relay for a reset link, entirely on your own infrastructure — Goaldy never sees it. Total lockout? A documented emergency override from the machine you're already running the container on.
+- **Nothing calls home.** No Goaldy-operated servers are ever in the auth path — not for password resets, not for two-factor codes, not for anything. Every credential, every secret, every session lives in the one SQLite file you already control.
+
+Tone: confident and specific, not fear-mongering about competitors and not a compliance-checklist wall of jargon — the six bullets above, each in plain language a non-technical self-hoster's more technical friend can read in ten seconds and believe. No CVE-scoreboard styling, no "bank-grade encryption" hand-waving — every claim names the actual mechanism (rate limiting, TOTP, AES-256-GCM) because specificity is what makes a security claim credible instead of decorative.
 
 ### F14.3 Design Language
 
@@ -388,7 +406,7 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 
 **v2.7 (design, not yet built): household multi-login.** Goaldy is still single-tenant — one deployment, one shared ledger — but a household is often more than one person (a couple, a family), and a single shared password is bad credential hygiene: it can't be revoked for one person without locking out everyone, it gets shared over text/notes apps because rotating it is a coordination problem, and there's no way to tell who did what. v2.7 adds **named identities that all have full, identical access to the same ledger** — this is emphatically not multi-tenancy or data isolation between household members; everyone continues to see every account, transaction, budget, and plan. What's new is:
 
-- **Login by email + password**, one identity per household member, instead of one shared password for the whole deployment. Email is used as the login identifier and for "who's logged in" display — it is **not** a verified channel in this iteration (no password-reset email, no notifications sent to it yet); `ADMIN_PASSWORD` still seeds the first/bootstrap identity's password on first boot, and if unset, the first password successfully submitted at the login screen becomes that identity's password.
+- **Login by email + password**, one identity per household member, instead of one shared password for the whole deployment. Email is used as the login identifier and for "who's logged in" display, and — as of F15.7/F15.8 (shipped) — as a real channel for password-reset email once a self-hoster opts into SMTP. **Superseded by F15.5 (shipped):** there is no `ADMIN_PASSWORD` and no "first password wins" fallback — `users` boots empty and the only way in is the one-time setup-token wizard.
 - **Individual revocation** — disable one member's login without touching anyone else's password.
 - **Attribution** — "who imported this," "who deleted that transaction" becomes answerable in logs and eventually in-app, because there's more than one identity to attribute an action to.
 - The shared API bearer token (F16.2) is **not** split per-user — it remains one deployment-wide credential for machine integrations, since every logged-in person already has identical data access regardless of which credential a request carries.
@@ -401,11 +419,11 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 
 **Superseded by F15.8's three-tier ladder** now that household multi-login exists — a single-password app only ever had the one path below, but a household of named identities has better options first. `GOALDY_RESET_PASSWORD`, set as an environment variable and the container restarted, remains the last-resort tier: force-resets a named user's password and clears their sessions, applied exactly once per value so it's safe to leave set without repeatedly logging the operator out.
 
-### F15.4 Login Hardening (design, not yet built)
+### F15.4 Login Hardening (shipped)
 
-A pre-public-launch security assessment found **no brute-force protection whatsoever** on the login endpoint — unlimited password attempts, no lockout, no rate limiting. Before Goaldy is distributed for self-hosting on public VPS providers, F15 requires: per-identity rate limiting and progressive lockout on failed logins, session-ID rotation on every login (mitigates session fixation), an idle session timeout in addition to the 30-day absolute expiry, timing-safe comparison of the API bearer token's hash (replacing a plain `===` string compare), and app-wide security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) — none of which exist today. See `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo for the full design. The deploy docs must also state plainly that a reverse proxy terminating TLS is required for any non-localhost deployment — today's `docker compose up` exposes port 3000 directly with no TLS guidance at all.
+A pre-public-launch security assessment found **no brute-force protection whatsoever** on the login endpoint — unlimited password attempts, no lockout, no rate limiting. Shipped: per-identity rate limiting and progressive lockout on failed logins (keyed on the submitted email, so an unknown address is throttled identically to a real one — no enumeration signal), session-ID rotation on every login, a 7-day idle session timeout in addition to the 30-day absolute expiry, and timing-safe comparison of the API bearer token's hash. **Not yet shipped**: app-wide security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) and the deploy-docs statement that a reverse proxy terminating TLS is required for any non-localhost deployment — both remain open, tracked under F19 (deploy hardening). See `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` and `docs/superpowers/plans/2026-09-04-security-hardening-household-auth.md` in the app repo.
 
-### F15.5 Out-of-the-Box Login: No Default Credential — Setup Wizard Instead (design, not yet built)
+### F15.5 Out-of-the-Box Login: No Default Credential — Setup Wizard Instead (shipped)
 
 **Revised approach.** Today's bootstrap (`ADMIN_PASSWORD`, or "the first password submitted at login becomes the password") is a *known default-credential pattern*. An earlier version of this requirement proposed forcing a graduation off that default on first login; this version removes the default credential from existing at all, which closes the risk more completely:
 
@@ -432,16 +450,16 @@ A household is not a single identity — see F15.1. The Settings page gets a **U
 
 Full UX detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo.
 
-### F15.7 Multi-Factor Authentication (design, not yet built)
+### F15.7 Multi-Factor Authentication (shipped)
 
 **TOTP first, not WebAuthn/passkeys** — a deliberate call based on what self-hosted deployments actually look like, not a simplicity shortcut. WebAuthn requires a secure context bound to a stable domain; a self-hosted instance is routinely reached at a bare IP or mid-setup on a self-signed cert, which WebAuthn can't operate under at all. TOTP (the standard 6-digit-code authenticator-app method) has no such precondition.
 
 - **Opt-in per household member**, from Settings — not mandatory. A solo self-hoster's risk profile differs from the "stranger on a public VPS" scenario the rest of this security work targets; forcing MFA on everyone adds friction the common case doesn't warrant. Worth revisiting as mandatory if Goaldy ever gains a multi-household or paid-tier context (F18) where that changes.
-- Setup shows a QR code (generated locally, never via a hosted API) and issues **10 one-time recovery codes**, shown once — the first line of defense for a lost device, ahead of anything in F15.8's password-recovery ladder.
+- Setup shows a QR code (generated locally, never via a hosted API) and issues **10 one-time recovery codes**, shown once — the first line of defense for a lost device, ahead of anything in F15.8's password-recovery ladder. The TOTP secret itself is encrypted at rest (AES-256-GCM, a self-hoster-supplied key) — a live credential, unlike the one-way password/token hashes elsewhere, so it gets stronger protection; enrollment is refused outright rather than silently falling back to plaintext if that key isn't configured.
 - Login gains a second step — a 6-digit code or an unused recovery code — whenever MFA is enabled for that identity.
 - **WebAuthn/passkeys are the deliberate next step**, once a stable domain with valid TLS is the assumed default deployment shape (a direct consequence of F15.4's reverse-proxy/TLS requirement actually landing) rather than aspirational guidance — not attempted this pass.
 
-### F15.8 Password (and MFA) Recovery — a three-tier ladder (design, not yet built)
+### F15.8 Password (and MFA) Recovery — a three-tier ladder (shipped)
 
 Self-hosting has no central party who can verify identity and hand back access, so "we'll email you a link" can't be assumed to work — replaced here with a ladder, cheapest and most-available option first:
 

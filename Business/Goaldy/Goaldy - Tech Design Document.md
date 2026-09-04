@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-04 v2.9  |
-| **Version**      | 2.9              |
+| **Last Updated** | 2026-09-04 v3.0  |
+| **Version**      | 3.0              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -29,6 +29,7 @@
 |**2.7**|**2026-09-04**|**§5.3a replaced, §5.4 updated: `ADMIN_PASSWORD` and "first password wins" removed entirely, not hardened.** `users` now boots empty; a one-time setup token (printed to container logs, same pattern as `API_TOKEN`) gates a first-boot setup wizard that collects a `settings.workspace_name` label plus the first real user in one step, then the wizard is permanently unreachable. This closes an unauthenticated-setup race that an empty-table design would otherwise open (whichever request reaches an unconfigured, network-reachable instance first would otherwise win it). `must_reset` is retained on `users` solely as a general admin-forced-reset mechanism, no longer tied to bootstrap. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.2.|
 |2.8|2026-09-04|**§5.3a gains an explicit "public demo" exception; §11's demo bullet updated to match.** Removing `ADMIN_PASSWORD` in v2.7 would silently break the public Render demo, which logs in with a fixed published password (`demo`) seeded via that exact env var. `DEMO_MODE=true` is now specified to bypass the setup-token gate and auto-provision a fixed demo identity on every boot — justified only by the demo's read-only + no-persistent-disk properties, and explicitly not a precedent for the real self-host boot path, which keeps no fixed-credential mechanism at all. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.3.|
 |**2.9**|**2026-09-04**|**New §5.6 (MFA) and §5.7 (password recovery ladder).** §5.6: TOTP chosen over WebAuthn as the first MFA method specifically because it has no secure-context/stable-origin precondition, unlike WebAuthn — fits self-hosted reality; opt-in per user, hashed one-time recovery codes, WebAuthn documented as a later addition once TLS is the assumed default. §5.7 replaces the single-tier `GOALDY_RESET_PASSWORD` mention with a three-tier ladder: another logged-in household member (zero infra), optional self-configured SMTP (off by default, opt-in), and `GOALDY_RESET_PASSWORD` extended to target a user by email and clear their MFA in the same operation. Explicitly excludes any Goaldy-operated recovery service. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.4.|
+|**3.0**|**2026-09-04**|**§5.1, §5.3, §5.6, §5.7 flipped from "design, not yet built" to shipped** — Phases 1–7 of the implementation plan (`docs/superpowers/plans/2026-09-04-security-hardening-household-auth.md`) all landed: the `users`/`mfa_recovery_codes` schema, the full auth rewrite (no default credential, per-identity rate limiting, session rotation/idle timeout, timing-safe bearer compare), household user management in Settings, TOTP MFA (encrypted at rest, opt-in), and all three password-recovery tiers including the new SMTP-based Tier 2. §5.3's body corrected to state plainly which pieces of "login hardening" actually shipped (rate limiting, session hardening) versus what's still open (security response headers, the TLS/reverse-proxy deploy-docs requirement — tracked under Phase 3/8). No design changes in this entry, purely a shipped/not-shipped status correction against the real code.|
 
 ---
 
@@ -296,7 +297,7 @@ meta (key TEXT PRIMARY KEY, value TEXT)  -- schema_version, and last_write_at (t
 
 No OAuth, no external identity provider. **Still single-tenant, single-ledger** — `goaldy.db` holds one household's financial data, full stop. What changed in v2.5 is *who can authenticate as a member of that household*, not what they can see once in.
 
-### 5.1 Identities — `users` table (design, not yet built)
+### 5.1 Identities — `users` table (shipped)
 
 Replaces the single `settings.password_hash` key with a `users` table: `id`, `email` (UNIQUE, the login identifier), `name` (display name — "logged in as" UI, audit/log attribution), `password_hash` (bcrypt), `disabled_at` (nullable — revoke one member without touching anyone else's credential), `created_at`.
 
@@ -315,13 +316,13 @@ The shared `Authorization: Bearer` token (below) stays a **single deployment-wid
 - **Browser**: an httpOnly `session` cookie, backed by a row in `sessions` — now carrying a `user_id` FK (was anonymous). 30-day absolute expiry **plus a shorter idle timeout** (new — sessions with no activity for the idle window expire even inside the 30-day window). Session ID rotates on every successful login (new — mitigates session fixation).
 - **Machine clients**: `Authorization: Bearer <token>`, compared against `settings.api_token_hash`. The digest comparison moves from `===` to `crypto.timingSafeEqual` (new — the prior string-equality compare on a public sha256 digest was a low-severity timing side-channel, cheap to close).
 
-### 5.3 Login hardening (new)
+### 5.3 Login hardening (shipped)
 
 Prompted by a pre-public-launch security assessment (`docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo) — the single biggest gap found was **zero brute-force protection**: unlimited password attempts against `/api/session`, no lockout, no delay. v2.5 adds, per-identity (not per-deployment, so one member's mistyped password doesn't lock out the household):
 
-- Rate limiting + progressive lockout on failed logins against a given email.
-- Mandatory security response headers app-wide (currently entirely absent): CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`.
-- Documentation that a reverse proxy terminating TLS is **required**, not optional, for any non-localhost deployment — `docker-compose.yml` binding `3000:3000` directly with no TLS story is a real gap the deploy docs must close.
+- Rate limiting + progressive lockout on failed logins against a given email (`lib/server/login-rate-limit.ts`) — shipped.
+- Session-ID rotation on every login, a 7-day idle timeout on top of the 30-day absolute TTL, and timing-safe bearer-token comparison (`lib/server/session.ts`, `lib/server/auth.ts`) — shipped.
+- **Still open:** mandatory security response headers app-wide (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) and documentation that a reverse proxy terminating TLS is **required**, not optional, for any non-localhost deployment — `docker-compose.yml` binding `3000:3000` directly with no TLS story is a real gap the deploy docs must still close. Tracked under Phase 3/8 of the implementation plan.
 
 ### 5.3a No default credential — empty-table bootstrap + setup wizard (revised)
 
@@ -366,7 +367,7 @@ A new "Users"/"Household" section inside the existing Settings page (not a stand
 
 Full detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo.
 
-### 5.6 Multi-Factor Authentication — TOTP (design, not yet built)
+### 5.6 Multi-Factor Authentication — TOTP (shipped)
 
 **TOTP (RFC 6238), not WebAuthn, first — a deployment-shape decision, not a simplicity shortcut.** WebAuthn/passkeys need a secure context bound to a stable origin; a self-hosted instance is routinely reached at a bare IP or mid-setup on a self-signed cert, which WebAuthn can't operate under. TOTP has no such precondition — a shared secret plus a clock works identically over plain HTTP on a LAN or HTTPS on the internet.
 
@@ -374,7 +375,7 @@ Full detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-aut
 
 Opt-in rather than mandatory because a solo self-hoster's risk profile differs from the "stranger on a public VPS" case this whole design otherwise targets — forcing MFA everywhere adds friction disproportionate to that case; revisit as mandatory if/when any multi-household or paid-tier context changes that calculus (§13). WebAuthn/passkeys are the deliberate next step once a stable domain + valid TLS is the assumed default deployment shape rather than aspirational README guidance — not attempted this pass.
 
-### 5.7 Password (and MFA) recovery — a three-tier ladder (design, not yet built)
+### 5.7 Password (and MFA) recovery — a three-tier ladder (shipped)
 
 Self-hosting means no central party can verify identity and hand back access, so "email you a reset link" can't be assumed to work — it needs mail infrastructure a self-hoster may not have. Recovery is a ladder, cheapest/most-available first, rather than one mechanism assumed to cover everyone:
 
