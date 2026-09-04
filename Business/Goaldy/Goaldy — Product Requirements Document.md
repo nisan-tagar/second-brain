@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-04 v3.3        |
-| **Version**      | 3.3                    |
+| **Last Updated** | 2026-09-04 v3.4        |
+| **Version**      | 3.4                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -31,6 +31,7 @@
 |**3.1**|**2026-09-04**|**New F15.7 (MFA) and F15.8 (password recovery ladder); F15.3 marked superseded.** F15.7: opt-in per-user TOTP (chosen over WebAuthn specifically because it has no secure-context/stable-domain precondition self-hosted deployments can't guarantee), hashed one-time recovery codes, WebAuthn documented as a later step once TLS is the assumed default. F15.8 replaces the single-tier `GOALDY_RESET_PASSWORD`-only recovery story with a ladder: another logged-in household member first (zero infra), optional self-configured SMTP second (off by default), `GOALDY_RESET_PASSWORD` extended to target a user by email and clear their MFA third. Explicitly excludes any Goaldy-operated recovery service, consistent with the free/no-liability self-hosted framing. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.4 in the app repo.|
 |**3.2**|**2026-09-04**|**F15.4/F15.5/F15.7/F15.8 flipped from "design, not yet built" to shipped** — the full auth rewrite (Phases 1–7 of `docs/superpowers/plans/2026-09-04-security-hardening-household-auth.md`) landed: no default credential, per-identity rate limiting/lockout, session rotation + idle timeout, household user management, encrypted-at-rest TOTP MFA, and all three password-recovery tiers. Also corrected two stale `ADMIN_PASSWORD` references (F15.1's inline description, F13.3's "clear data" behavior) that contradicted the shipped design. **New F14.4 "Security, as a Differentiator"** — adds a real, shipped-features-only security section to the landing page's structure (F14.2), between feature highlights and "Try it": six specific, traceable-to-code proof points (no default credential, brute-force protection, household multi-login, TOTP MFA, the full recovery ladder, no cloud dependency in the auth path) plus explicit tone guidance (specific mechanisms named, not compliance-checklist jargon or fear-mongering) — written because the security work is now substantial and true enough to be a genuine differentiator, not filler.|
 |3.3|2026-09-04|**F15.4 fully closed** — the two items it still listed as not-yet-shipped are done: app-wide security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy`, verified against a real running production server, not just config review) and a new README "Putting it on the internet" section stating plainly that a reverse-proxy-terminated-TLS deployment is required, not optional, for anything reachable outside the operator's own network — with a Caddy example and the matching `docker-compose.yml` port-binding change (`127.0.0.1:3000:3000`) plus an inline comment pointing to it. This closes the last open item from the original pre-launch security assessment.|
+|3.4|2026-09-04|**F15.6 gains a Localization + live password feedback note (Phase 4 of the implementation plan, shipped).** Every auth screen (login, MFA, setup, forgot-password, reset-password) is now fully wired to `next-intl` in both locales, and setup/reset-password show live per-rule password-strength feedback instead of only failing on submit. This closes every phase of `docs/superpowers/plans/2026-09-04-security-hardening-household-auth.md` except one deliberately deferred cosmetic item (workspace name not yet shown in the topbar).|
 
 ---
 
@@ -450,6 +451,8 @@ A household is not a single identity — see F15.1. The Settings page gets a **U
 - **"Logged in as {name}"** is surfaced in the topbar/account menu (and the mobile shell's equivalent) — the first visible payoff of having named identities at all, and the seed for future "who did this" attribution in import history and any future audit log.
 
 Full UX detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo.
+
+**Localization + live password feedback (shipped):** every auth screen (login, MFA step, setup wizard, forgot-password, reset-password) is fully wired to `next-intl` in both `en`/`he` — no hardcoded English left over from the initial functional pass. Setup and reset-password now show live per-rule password-strength feedback (length, character-class count) as the user types, reusing the same server-side `PasswordSchema` rather than a separate client-only check. **Not done:** the workspace name is still only shown on the login screen, not surfaced in the topbar — deliberately deferred as cosmetic, out of security scope.
 
 ### F15.7 Multi-Factor Authentication (shipped)
 
