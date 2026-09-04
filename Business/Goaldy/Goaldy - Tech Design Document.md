@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-04 v3.0  |
-| **Version**      | 3.0              |
+| **Last Updated** | 2026-09-04 v3.1  |
+| **Version**      | 3.1              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -30,6 +30,7 @@
 |2.8|2026-09-04|**§5.3a gains an explicit "public demo" exception; §11's demo bullet updated to match.** Removing `ADMIN_PASSWORD` in v2.7 would silently break the public Render demo, which logs in with a fixed published password (`demo`) seeded via that exact env var. `DEMO_MODE=true` is now specified to bypass the setup-token gate and auto-provision a fixed demo identity on every boot — justified only by the demo's read-only + no-persistent-disk properties, and explicitly not a precedent for the real self-host boot path, which keeps no fixed-credential mechanism at all. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.3.|
 |**2.9**|**2026-09-04**|**New §5.6 (MFA) and §5.7 (password recovery ladder).** §5.6: TOTP chosen over WebAuthn as the first MFA method specifically because it has no secure-context/stable-origin precondition, unlike WebAuthn — fits self-hosted reality; opt-in per user, hashed one-time recovery codes, WebAuthn documented as a later addition once TLS is the assumed default. §5.7 replaces the single-tier `GOALDY_RESET_PASSWORD` mention with a three-tier ladder: another logged-in household member (zero infra), optional self-configured SMTP (off by default, opt-in), and `GOALDY_RESET_PASSWORD` extended to target a user by email and clear their MFA in the same operation. Explicitly excludes any Goaldy-operated recovery service. Matches `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.4.|
 |**3.0**|**2026-09-04**|**§5.1, §5.3, §5.6, §5.7 flipped from "design, not yet built" to shipped** — Phases 1–7 of the implementation plan (`docs/superpowers/plans/2026-09-04-security-hardening-household-auth.md`) all landed: the `users`/`mfa_recovery_codes` schema, the full auth rewrite (no default credential, per-identity rate limiting, session rotation/idle timeout, timing-safe bearer compare), household user management in Settings, TOTP MFA (encrypted at rest, opt-in), and all three password-recovery tiers including the new SMTP-based Tier 2. §5.3's body corrected to state plainly which pieces of "login hardening" actually shipped (rate limiting, session hardening) versus what's still open (security response headers, the TLS/reverse-proxy deploy-docs requirement — tracked under Phase 3/8). No design changes in this entry, purely a shipped/not-shipped status correction against the real code.|
+|3.1|2026-09-04|**§5.3's remaining open items closed.** Security response headers now shipped (`apps/web/lib/server/security-headers.ts`, wired via `next.config.ts`'s `headers()` hook — verified against a real running production server via curl, not just config review): `X-Frame-Options`, `X-Content-Type-Options`, `Strict-Transport-Security`, `Referrer-Policy`, and a same-origin-scoped CSP (deliberately keeps `'unsafe-inline'`/`'unsafe-eval'` for scripts, since Next.js's own hydration needs it and a nonce-based CSP is separate follow-up work — but blocks every cross-origin fetch/image/font/script/style/WebSocket, closing the exfiltration half of an XSS payload). README gained a "Putting it on the internet" section stating a reverse-proxy-terminated-TLS deployment is required for anything reachable outside the operator's own network, with a Caddy example; `docker-compose.yml` gained a matching inline comment pointing operators to it. This closes every item from the original pre-launch security assessment.|
 
 ---
 
@@ -322,7 +323,8 @@ Prompted by a pre-public-launch security assessment (`docs/superpowers/specs/202
 
 - Rate limiting + progressive lockout on failed logins against a given email (`lib/server/login-rate-limit.ts`) — shipped.
 - Session-ID rotation on every login, a 7-day idle timeout on top of the 30-day absolute TTL, and timing-safe bearer-token comparison (`lib/server/session.ts`, `lib/server/auth.ts`) — shipped.
-- **Still open:** mandatory security response headers app-wide (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) and documentation that a reverse proxy terminating TLS is **required**, not optional, for any non-localhost deployment — `docker-compose.yml` binding `3000:3000` directly with no TLS story is a real gap the deploy docs must still close. Tracked under Phase 3/8 of the implementation plan.
+- Security response headers app-wide — shipped (`apps/web/lib/server/security-headers.ts`, wired via `next.config.ts`'s `headers()` hook): `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Strict-Transport-Security`, `Referrer-Policy`, and a same-origin-scoped Content-Security-Policy. The CSP is deliberately not maximally strict — it keeps `'unsafe-inline'`/`'unsafe-eval'` for scripts since Next.js's own hydration relies on inline script execution and a nonce-based CSP is real, separate follow-up work — but it does block every fetch/XHR/image/font/script/style load and every WebSocket connection to any origin but this one, which closes the exfiltration half of an XSS payload even without fully hardening the injection half.
+- **Still open:** documentation that a reverse proxy terminating TLS is **required**, not optional, for any non-localhost deployment — `docker-compose.yml` binding `3000:3000` directly with no TLS story is a real gap the deploy docs must still close. Tracked under Phase 8 of the implementation plan.
 
 ### 5.3a No default credential — empty-table bootstrap + setup wizard (revised)
 
