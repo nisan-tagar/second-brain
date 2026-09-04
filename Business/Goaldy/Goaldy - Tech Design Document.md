@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-04 v2.5  |
-| **Version**      | 2.5              |
+| **Last Updated** | 2026-09-04 v2.6  |
+| **Version**      | 2.6              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -25,6 +25,7 @@
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
 |**2.5**|**2026-09-04**|**§5 rewritten: security hardening + household multi-login (design, not yet built).** Prompted by a security assessment ahead of public self-host distribution (see `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo). Two changes, deliberately scoped together: (1) **login hardening** — per-identity rate limiting/lockout on failed logins, session-ID rotation on login, an idle timeout in addition to the 30-day absolute TTL, timing-safe bearer-token comparison (`crypto.timingSafeEqual` replacing `===` on the sha256 digest), and mandatory security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) — none of this existed before. (2) **household multi-login** — a new `users` table (`id`, `email` UNIQUE, `name`, `password_hash`, `disabled_at`) replaces the single `settings.password_hash` key; `sessions` gains a `user_id` FK for per-person "log out everywhere" and audit attribution ("who did this" in logs and a "logged in as" UI surface). **Explicitly not multi-tenancy**: `goaldy.db` remains single-ledger — every household member sees the same accounts/transactions, so no query in `lib/server/queries/*` needs `user_id` scoping and none is added. `email` is captured as a **login identifier only** in this iteration, not a verified channel — no SMTP dependency, no password-reset-by-email yet; `GOALDY_RESET_PASSWORD` remains the recovery path. The shared `Authorization: Bearer` API token stays a single deployment-wide credential (a machine credential for household infra, not a person) — not made per-user. `plan_members` (§8) is a distinct, pre-existing concept (age-labels for plan projections) and is not merged with `users`.|
+|2.6|2026-09-04|**New §5.3a and §5.5.** §5.3a: the default-credential bootstrap (`ADMIN_PASSWORD`/first-login-wins) is now explicitly transient — the bootstrap identity is created with `must_reset = true` and is server-side confined to a mandatory setup screen (real name/email, server-validated password strength against a local common-password list) until completed; this closes the "shipped with a known default password" pattern a public distribution can't risk. §5.1's `users` table gains `must_reset` and `removed_at` (soft-delete) columns. §5.5 is the full UI/UX spec for the Settings "Users" section — list/add/edit/disable/remove/reset-password, a self-lockout guardrail (can't disable/remove yourself as the last active identity), and the "logged in as" attribution surface — promoted from a one-line bullet to a real spec, matching the corresponding detail in `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.1.|
 
 ---
 
@@ -302,6 +303,8 @@ Replaces the single `settings.password_hash` key with a `users` table: `id`, `em
 
 `plan_members` (§8) is a **distinct, pre-existing concept** — birth-year labels used to trigger AGE-based plan projections — and is not merged with `users`; a plan member is not necessarily someone who logs in, and vice versa.
 
+`users` also carries `must_reset` (bool) and `removed_at` (soft-delete, nullable) — see §5.3a and §5.5.
+
 The shared `Authorization: Bearer` token (below) stays a **single deployment-wide credential**, not per-user — it authenticates household infra/integrations (Moneyman, scripts), not a person, and every logged-in person already sees the same data regardless of which credential reaches it.
 
 ### 5.2 Authentication paths (`apps/web/lib/server/auth.ts`)
@@ -317,15 +320,35 @@ Prompted by a pre-public-launch security assessment (`docs/superpowers/specs/202
 - Mandatory security response headers app-wide (currently entirely absent): CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`.
 - Documentation that a reverse proxy terminating TLS is **required**, not optional, for any non-localhost deployment — `docker-compose.yml` binding `3000:3000` directly with no TLS story is a real gap the deploy docs must close.
 
+### 5.3a Forced upgrade off the default credential (new)
+
+The known-default-credential pattern (`ADMIN_PASSWORD`, or "first password submitted wins") is only safe as a *transient* bootstrap state, never a steady one — a public self-host distribution means a scanner can know Goaldy's bootstrap behavior as well as any legitimate operator. So the bootstrap identity is created with `must_reset = true`, and the app enforces — **server-side, on every request, not just a dismissible UI banner** — that a `must_reset` session can reach nothing except the mandatory setup screen (real name, real email replacing the `admin@localhost` placeholder, a new password passing strength validation below). Only completing that screen clears the flag and unlocks normal access. The same flag is reused for admin-forced resets later (e.g. "force this person to change their password next login" as a Settings action), so it's modeled as a general per-user state, not a one-time bootstrap-only field.
+
+**Password strength** is validated server-side (a client-only check is not a control, since this app explicitly supports scripting directly against its REST API): minimum length plus a composition or strength-score rule, checked against a small local common/breached-password list — no live external API call, preserving the "no cloud dependency" property of §0.
+
 ### 5.4 Bootstrap and recovery
 
-`ensureReady()` (`apps/web/lib/server/auth.ts`, memoized once per process): on first boot, generates an API token (from the `API_TOKEN` env var, or a random one logged once) and seeds the first user's password hash from `ADMIN_PASSWORD` if set. If `ADMIN_PASSWORD` is unset, the **first successful password submitted at login becomes the password** for that bootstrap identity — a bootstrap-via-first-login fallback, preserved from v2.4. `GOALDY_RESET_PASSWORD` forces a password reset (scoped to the bootstrap/first user unless the design is extended to name a target email) and clears all sessions, applied exactly once per value (tracked by a hash marker, so leaving the env var set doesn't repeatedly wipe sessions).
+`ensureReady()` (`apps/web/lib/server/auth.ts`, memoized once per process): on first boot, generates an API token (from the `API_TOKEN` env var, or a random one logged once) and seeds the first user's password hash from `ADMIN_PASSWORD` if set (identity: name/email placeholder, `must_reset = true` per §5.3a). If `ADMIN_PASSWORD` is unset, the **first successful password submitted at login becomes the password** for that bootstrap identity — a bootstrap-via-first-login fallback, preserved from v2.4, and still subject to the same forced-upgrade step immediately after. `GOALDY_RESET_PASSWORD` forces a password reset (scoped to the bootstrap/first user unless the design is extended to name a target email) and clears all sessions, applied exactly once per value (tracked by a hash marker, so leaving the env var set doesn't repeatedly wipe sessions).
 
 `DEMO_MODE=true` (used only by the public demo, §11) additionally seeds a curated fixture on first boot, and refuses to run if the database already has accounts it didn't create.
 
 `withAuth()` (`apps/web/lib/server/http.ts`) wraps every API route: runs `ensureReady()`, requires one of the two auth paths above, and — when `DEMO_MODE=true` — blocks every non-GET/HEAD request except `/api/session` (login/logout), returning a 403 on any attempted write.
 
 OpenAPI 3.1 is generated straight from the Zod schemas (`lib/server/openapi.ts`), served at `/api/openapi.json`, with Swagger UI at `/api/docs`.
+
+### 5.5 User management (Settings) — UI/UX
+
+A new "Users"/"Household" section inside the existing Settings page (not a standalone route), visible identically to every logged-in identity — this design has **no roles/permissions tier**; every household member has equal standing to manage every other member's identity, matching the equal data access already established in §5.1. Requirements:
+
+- **List**: name, email, status (Active/Disabled), last-active timestamp (from `sessions.last_activity`), row actions (Edit, Disable/Enable, Reset password, Remove).
+- **Add**: name + email (validated, unique) + an inviter-set temporary password, shared out-of-band (no SMTP invite flow yet) — created with `must_reset = true` so the invitee is forced through real password setup on first login rather than the temporary password persisting.
+- **Edit**: name/email only; password changes are a separate, explicitly logged "Reset password" action.
+- **Disable**: sets `disabled_at`, immediately invalidates that identity's active sessions; reversible.
+- **Remove**: soft-delete (`removed_at`) rather than a hard delete, so `user_id` attribution elsewhere (e.g. import-batch history) doesn't dangle; gated behind a plain-language confirmation dialog (`Modal`/`ConfirmDialog` per the existing convention).
+- **Guardrail**: the UI blocks a user from disabling or removing themselves while they are the only remaining active identity — "lock the household out" is a mistake class the UI prevents, not just documents.
+- **Attribution surface**: a "logged in as {name}" indicator in the topbar (desktop) and the mobile shell's equivalent, with Logout. New activity going forward (not backfilled onto pre-`users` history) records `user_id` wherever the underlying table has a natural place for it.
+
+Full detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo.
 
 ---
 

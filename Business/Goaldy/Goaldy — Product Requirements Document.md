@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-04 v2.7        |
-| **Version**      | 2.7                    |
+| **Last Updated** | 2026-09-04 v2.8        |
+| **Version**      | 2.8                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -25,6 +25,7 @@
 |2.5|2026-08-29|**F18 (Goaldy.AI) added — the first documented monetization plan for the product.** Product/marketing strategy work concluded that Goaldy stays free and self-hosted forever, with a separate opt-in paid layer (Goaldy.AI) sold as a subscription: an in-app assistant scoped to one instance's own data (categorization assist, insight-to-action recommendations against the Plan simulator, range-based risk simulation, proactive goal-drift nudges) plus a higher, MCP-enabled tier that exposes an instance's harmonized accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, etc.) — positioned as a system-of-record layer for users who already run per-institution agents/MCPs but lack any cross-account, goal-aware memory between sessions. Tax optimization was evaluated and explicitly excluded as a separate, higher-liability product. §3 Non-Goals: the blanket "no Stripe, no paid tiers" line is corrected — monetization is now planned, gated through a small externally-run licensing service (Stripe-backed, signed offline-verifiable entitlement tokens) kept structurally separate from the single-tenant self-hosted app, never touching a user's financial data. §4 Current State Summary: "monetization" removed from the never-built/no-roadmap bucket.|
 |2.6|2026-08-29|**Free-tier roadmap items added across F2, F4, F6, F10, F13, F15, F17**, carrying the same product/marketing strategy session's conclusions for what ships ahead of (and independent of) Goaldy.AI: F2.1/F2.4 — OFX/QIF import, a SimpleFIN bridge, and automated transfer peer-matching all marked Planned (the ingestion items are also named prerequisites for F18.1's "harmonizes every account" MCP pitch to hold up). F4.4 — a localized starter tag tree and a config-only rule/tag-tree template exchange (cross-referenced to F18.6) planned against the empty-tag-tree problem. F6.4 (new) — a recurring/upcoming-transaction preview, planned as an extension of the existing rules engine. F10 and F15.2 — both stubs explicitly flagged as launch blockers to close before any public GTM push, not just open gaps. F13.2 — a planned feedback/issue-reporting channel, needed because the app is closed-source and therefore carries no GitHub Issues tab by default. F13.3 — a planned one-click encrypted scheduled backup, replacing the manual `docker compose cp` step. F17 — PWA installability reclassified from "not currently planned" to Planned.|
 |**2.7**|**2026-09-04**|**F15/F16 rewritten (design, not yet built): login hardening + household multi-login.** Prompted by a pre-public-launch security assessment. F15.1 adds named per-household-member identities (email + password login, `disabled_at` per-identity revocation, attribution in logs/UI) — explicitly not multi-tenancy: every identity sees the exact same shared ledger, no data isolation between household members. Email is a login identifier only in this pass, not a verified channel (no password-reset-by-email yet). New F15.4 documents the login-hardening gaps found (no brute-force protection, no security headers, no documented TLS requirement) as pre-launch blockers. F16.1/F16.2 updated: sessions now tied to an identity (so revocation is per-person), the shared API bearer token stays single deployment-wide (not split per-user).|
+|2.8|2026-09-04|**New F15.5 and F15.6.** F15.5: the default-credential bootstrap must force a graduation — first login on the bootstrap credential routes into a non-dismissible, server-enforced setup step (real name/email + a server-validated strong password) before any other part of the app is reachable; closes the "shipped with a known default password" risk ahead of public distribution. F15.6: full Settings "Users" UX — list/add/disable/remove/reset-password, a self-lockout guardrail preventing the last active member from disabling/removing themselves, and a "logged in as" attribution surface. Both promoted from one-line mentions to full requirements, matching `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` v1.1 in the app repo.|
 
 ---
 
@@ -400,6 +401,29 @@ No third-party identity provider. Two equal-trust paths: a browser session cooki
 ### F15.4 Login Hardening (design, not yet built)
 
 A pre-public-launch security assessment found **no brute-force protection whatsoever** on the login endpoint — unlimited password attempts, no lockout, no rate limiting. Before Goaldy is distributed for self-hosting on public VPS providers, F15 requires: per-identity rate limiting and progressive lockout on failed logins, session-ID rotation on every login (mitigates session fixation), an idle session timeout in addition to the 30-day absolute expiry, timing-safe comparison of the API bearer token's hash (replacing a plain `===` string compare), and app-wide security response headers (CSP, `X-Frame-Options`, `Strict-Transport-Security`, `X-Content-Type-Options`) — none of which exist today. See `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo for the full design. The deploy docs must also state plainly that a reverse proxy terminating TLS is required for any non-localhost deployment — today's `docker compose up` exposes port 3000 directly with no TLS guidance at all.
+
+### F15.5 Out-of-the-Box Login: Forced Upgrade Off the Default Credential (design, not yet built)
+
+Today's bootstrap (`ADMIN_PASSWORD`, or "the first password submitted at login becomes the password") is a *known default-credential pattern* — acceptable as a transient first-boot state, not as something that can persist indefinitely once Goaldy is distributed to strangers running it on public VPS providers. A public release must **force**, not merely suggest, a graduation off that default:
+
+- The first successful login against the bootstrap credential does not reach the app. It routes into a **mandatory, non-dismissible setup step**: real display name, real email (replacing a placeholder), and a new password that passes strength validation.
+- This is enforced by the server on every request from that identity, not by a UI screen the user could navigate around via a direct URL.
+- Password strength is checked server-side (minimum length + composition/strength-score rule, checked against a small local common-password list) — this app is explicitly scriptable via its documented REST API, so a client-side-only check is not a real control.
+- The same mechanism doubles as a general "force this person to set a new password next login" action, reusable for admin-initiated resets under F16.3 below — not a bootstrap-only special case.
+
+### F15.6 User Management (Settings)
+
+A household is not a single identity — see F15.1. The Settings page gets a **Users** (or "Household") section, equally accessible to every logged-in member (this design has no admin/permissions tier; see F15.1's rationale):
+
+- **List** every household member: name, email, active/disabled status, last-active time, and row actions.
+- **Add** a member: name, email, and an inviter-set temporary password shared out-of-band — the invitee is forced through the F15.5 setup flow on their first login rather than the temporary password persisting.
+- **Disable/Enable**: revoke and restore one member's access independently of everyone else's; disabling immediately ends that member's active sessions.
+- **Remove**: a confirmed, plain-language-worded deletion (soft-deleted under the hood so historical attribution doesn't break) — distinct from Disable.
+- **Reset password**: force a member (including yourself) through the F15.5 validated-setup flow again.
+- **Self-lockout guardrail**: the UI refuses to let the last remaining active member disable or remove themselves — "locking the household out of its own ledger" is a mistake class this UI actively prevents.
+- **"Logged in as {name}"** is surfaced in the topbar/account menu (and the mobile shell's equivalent) — the first visible payoff of having named identities at all, and the seed for future "who did this" attribution in import history and any future audit log.
+
+Full UX detail: `docs/superpowers/specs/2026-09-04-security-hardening-household-auth.md` in the app repo.
 
 ---
 
