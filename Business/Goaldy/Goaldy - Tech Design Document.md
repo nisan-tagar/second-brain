@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-08-29 v2.4  |
-| **Version**      | 2.4              |
+| **Last Updated** | 2026-09-05 v2.5  |
+| **Version**      | 2.5              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -24,6 +24,7 @@
 |2.2|2026-08-26|§4a: documents `updateGeneration`/`deleteGeneration` — direct edit/delete of any generation (open or closed) by id, superseding the original "closed history is immutable" design. `updateGeneration` touches only amount/currency/type/period/custom_days/rollover, never `start_date`/`end_date`, so the partial-unique-index and CHECK-constraint invariants remain untouched by this change. `deleteGeneration` reopens the tag's previous closed generation when the deleted one was open (if one exists), and leaves a plain coverage gap when the deleted one was already closed — both in one transaction. New `PATCH`/`DELETE /api/tags/:id/budget/:generationId` routes.|
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
+|2.5|2026-09-05|**§14 added: Goaldy Cloud multi-tenant hosting architecture (proposed, not built).** Documents the decision to **keep SQLite-per-tenant rather than pivot to a shared multi-tenant Postgres**, and specifies the refactor that makes it possible. The load-bearing argument is a business one: a Postgres cloud plus a SQLite self-host means two data layers forever, which means self-hosted bug reports no longer describe the hosted product — destroying the value exchange the GTM plan depends on (see `Goaldy — Market Analysis and GTM Strategy.md` §10.4). The refactor is narrow because `lib/server/db.ts` holds a module-level singleton behind four async primitives that all 39 consuming modules call without a tenant argument: replacing that singleton with an `AsyncLocalStorage`-scoped, LRU-pooled per-tenant handle, and entering that context in `withAuth`, changes **two files and no query code**. Also specifies the separate control-plane database (the one place Postgres is correct — tenants, Stripe state, entitlements; never financial data, merging with the §13 licensing service), and records the four risks this architecture actually carries: better-sqlite3's synchronous API causing event-loop head-of-line blocking across tenants in a shared process, per-tenant migration orchestration (today migrations run lazily inside `getDb()`, which does not survive N files), continuous WAL replication for durability, and the loss of trivial horizontal scaling because a tenant's file is pinned to one node. §12 'No multi-tenancy / No Postgres' amended to scope those non-goals to the self-hosted app rather than the (proposed) hosted service.|
 
 ---
 
@@ -515,14 +516,108 @@ architecture.
 
 ---
 
+## 14. Goaldy Cloud — Multi-Tenant Hosting Architecture (Proposed, Not Built)
+
+Technical counterpart to `Goaldy — Market Analysis and GTM Strategy.md` §7.2 and §10.3,
+which make a managed hosted tier the primary revenue line. Nothing here is implemented.
+
+### 14.1 The decision: SQLite-per-tenant, not shared Postgres
+
+**We do not pivot to a shared multi-tenant Postgres.** The deciding argument is not
+performance, it is the value exchange the whole GTM rests on:
+
+> A Postgres cloud plus a SQLite self-host means **two data layers, maintained forever**.
+> The moment they diverge, a self-hoster's bug report stops describing the hosted product.
+> The free tier's entire economic function — defect discovery, import adapters, edge-case
+> coverage contributed by people running configurations we will never own — evaporates.
+> One codebase, one data layer, one file format, two deployment shapes.
+
+Secondary, but real: the alternative (forcing self-hosters onto Postgres) destroys the
+"one file you own" promise (§0), the single-container Docker quickstart, and the exit
+story — *"here is your entire database, take it and go"* — which is the most credible
+marketing claim this product has and is literally a file copy today.
+
+**When Postgres *would* have been right, and why none of it applies:** cross-tenant
+analytics or benchmarking (explicitly never to be sold — GTM §10.4); >5k tenants needing
+elastic horizontal scale (well beyond the plan's own kill criteria); high-volume
+concurrent writers per tenant (a household has 2–4 users); cross-tenant joins for the
+Pro entity layer (entities live *inside* a household, never across them).
+
+### 14.2 The refactor is two files, and no query code
+
+The coupling is narrower than it looks. `lib/server/db.ts` holds a module-level
+singleton (`let _db`) resolved once from env, exposed behind four async primitives
+(`queryAll`/`queryOne`/`execSQL`/`execTransaction`). **All 39 consuming modules call
+those primitives with no tenant argument and no direct handle access.**
+
+Therefore:
+
+1. **`db.ts`** — replace the singleton with a tenant-scoped handle resolved from
+   `AsyncLocalStorage`, backed by an LRU pool of open `Database` instances (open files
+   are cheap; cap the pool and close on eviction). The four primitives keep their exact
+   signatures. Self-hosted mode resolves to a single fixed tenant, so the existing
+   deployment is the degenerate case of the same code path — not a branch.
+2. **`http.ts` / `auth.ts`** — `withAuth` is already the single choke point every `/api`
+   route passes through. Resolve the tenant there (subdomain or session claim), then run
+   the handler inside the async context.
+
+**Zero changes to `lib/server/queries/*`, `ingest.ts`, `importers/`, `exporters/`,
+`restore/`.** That property is the reason this architecture is affordable, and it must be
+protected: **no module outside `db.ts` may call `getDb()` directly or hold a handle
+across requests.** Worth a guard test in the style of `lib/dev/modal-guard.test.ts`.
+
+### 14.3 The control plane — the one place Postgres is correct
+
+A **separate** small database (Postgres) holding: tenant id, subdomain, plan and
+entitlements, Stripe customer/subscription state, database location, lifecycle status.
+It is merged with the §13 licensing service rather than being a second system.
+
+**It never holds financial data.** This keeps §0's invariant literally true even in
+Cloud: the application still owns exactly one file per household, and the control plane
+knows only that the household exists and what it has paid for. It is also what makes a
+security page honest — we can state precisely what the hosted service can see.
+
+### 14.4 The four risks this architecture actually carries
+
+Named explicitly so they are engineered rather than discovered.
+
+| Risk | Detail | Response |
+|---|---|---|
+| **Synchronous driver** | `better-sqlite3` is synchronous; the `async` primitives in `db.ts` are cosmetic. In a shared Node process one tenant's slow query blocks the event loop for **every** tenant. Invisible in single-user self-host, real in multi-tenant. | Personal ledgers are small (10⁴–10⁵ rows; queries in single-digit ms), so this is likely a non-issue into the low hundreds of tenants. **Measure before engineering around it.** Escape hatches, in order of cost: worker threads per tenant; process-or-machine-per-tenant (Fly Machines shape). |
+| **Migrations at N files** | `runMigrations()` currently runs lazily inside `getDb()`. With N tenant files that means a slow, risky first request after every deploy, and one tenant's failed migration is a silent per-tenant outage. | A deliberate orchestrated runner: enumerate tenants, migrate with resume, isolate and report per-tenant failure, gate traffic on completion. This is the most commonly underestimated piece of SQLite-per-tenant. |
+| **Durability** | A Docker volume and a manual `cp` is not a hosting business. | Continuous WAL replication per tenant (Litestream/LiteFS shape) to object storage, with point-in-time restore, and restore drills. **Build once, ship twice:** this is the same machinery as the planned one-click encrypted scheduled backup (PRD F13.3), so self-hosters get it too. |
+| **No trivial horizontal scale** | A tenant's file is pinned to one node; stateless replicas behind a round-robin LB do not work, and a network filesystem is actively hostile to SQLite. | Accept it. One well-provisioned node serves hundreds-to-low-thousands of households at 85–95% gross margin. Beyond that: sticky routing by tenant, or a machine-per-tenant platform. Not a constraint at any scale this plan's kill criteria contemplate. |
+
+### 14.5 Encryption and isolation
+
+Isolation is structural — separate files, no shared tables, no query can cross a tenant
+boundary because no query has a tenant predicate to get wrong. This is a genuine
+security advantage over row-level multi-tenancy, where cross-tenant leakage is a
+permanent class of bug.
+
+Encryption at rest, staged: volume-level encryption plus per-tenant keys on **backup
+artifacts** first (cheap, covers the realistic exfiltration path); full per-tenant
+SQLCipher (`better-sqlite3-multiple-ciphers`) later, if and when the S2 segment demands
+it — it complicates key management, backup and restore, so it is not free.
+
+### 14.6 What does not change
+
+The UI, the REST API surface, OpenAPI generation, the query layer, the importer/exporter/
+restore pipelines, the schema, and the self-hosted deployment shape. A self-hosted
+instance after this refactor is byte-for-byte the same product with a single fixed
+tenant — which is the point.
+
+
+---
+
 ## 12. What We Are Not Building
 
 Explicit non-goals, current as of this rewrite:
 
 - **No AI/LLM categorization** — confirmed absent today (§6); the schema has a reserved seam, nothing more.
 - **No OAuth / third-party identity provider** — the auth model (§5) is deliberately minimal for a single-operator instance.
-- **No multi-tenancy, no waitlist, no invite-only beta** — this is self-hosted software, not a hosted service with a signup funnel.
-- **No Postgres or any second database** — one SQLite file is the entire application database.
+- **No multi-tenancy, no waitlist, no invite-only beta — *in the self-hosted app*.** Amended v2.5: a managed hosted service (Goaldy Cloud) is planned, and §14 specifies it as tenant-scoped routing over the same one-file-per-household model rather than as row-level multi-tenancy. The self-hosted product remains single-tenant by construction; it is the degenerate one-tenant case of the same code path.
+- **No Postgres or any second database *in the application data path*.** Amended v2.5: one SQLite file remains the entire application database, per household, in both deployment shapes. The proposed Cloud control plane (§14.3, merged with the §13 licensing service) is a separate Postgres holding tenancy, entitlement and billing state only — it never stores financial data, and no query in `lib/server/queries/*` will ever touch it.
 - **Israeli-specific financial-instrument account types or intelligence cards** (קרן השתלמות, pension, mortgage-rate comparison) — never built; the account model is generic.
 - **No paid tier or Stripe integration exists in the self-hosted app today.** A paid Goaldy.AI layer, and the licensing service that gates it, are planned — see §13 — and are deliberately architected as a system separate from `goaldy.db`, not a violation of this app's single-tenant model.
 - **No native mobile app.**
