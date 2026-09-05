@@ -1,8 +1,8 @@
 | Field            | Value                                      |
 | ---------------- | ------------------------------------------ |
 | **Created**      | 2026-09-05 14:00 UTC                       |
-| **Last Updated** | 2026-09-05 14:00 UTC v1.0                  |
-| **Version**      | 1.0                                        |
+| **Last Updated** | 2026-09-05 18:30 UTC v1.1                  |
+| **Version**      | 1.1                                        |
 | **Status**       | Draft — for CEO decision                   |
 | **Author**       | Business development / market research session |
 | **Related**      | PRD v2.6 (esp. §2, F18), TDD §13            |
@@ -12,6 +12,7 @@
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-09-05 | Initial market analysis. Industry scan of personal-finance, self-hosted-finance, family-office and SMB-cashflow categories. Verdict on family-office and SMB fit (both rejected as primary segments, with a narrow qualified wedge defined for each). Feature gap analysis ranked by revenue proximity vs. build cost. GTM recommendation built around a free self-hosted tier, with a structural correction to PRD F18.4 (hosting is the primary revenue line, not an add-on to AI) and a challenge to the closed-source decision. |
+| 1.1 | 2026-09-05 | **ICP/segmentation (§8) and a customer-anchored feature roadmap (§9) added** — the substance of this revision. Two corrections to v1.0 driven by new evidence. (a) **The beachhead is re-specified.** v1.0 named cross-border/multi-currency households as the beachhead on a "nobody serves this person" claim; that claim is wrong — a cohort of 2025–26 entrants (Borderless Budget, FlowFund, Tallyroot, Auritrack, Monavio) targets exactly this person, and Lunch Money owns the niche natively at a $60/yr pay-what-you-want minimum. Multi-currency is therefore re-classified as a **targeting filter and defensibility moat, not the value proposition** — it is the cheapest axis in the market. (b) **The value proposition is re-specified as planning, not budgeting**, on two findings: planning tools price 30% above full PFM suites (ProjectionLab $129/yr, $1,199 lifetime, $549/yr advisor; Boldin $144/yr — for a simulator with no ledger underneath), and the category's documented #1 churn cause is apps that "show data without producing behavior change" and fail to connect cashflow to a plan. Goaldy's shipped Plan simulator (PRD F8) is the only asset that addresses that, and no self-hosted competitor has one. Consequent changes: Goaldy Cloud repriced from $96/yr to $120–144/yr with a lifetime option added; the roadmap is re-ordered by **retention risk** rather than feature appeal (manual-entry apps churn at 3x the rate of auto-sync apps); Goaldy.AI moves from Phase 2 to the **last** horizon. |
 
 ---
 
@@ -23,7 +24,9 @@
 4. **The single highest-leverage missing feature is automated ingestion (SimpleFIN Bridge + GoCardless/PSD2), not AI.** Every competitor's #1 review complaint is manual CSV. This is a weeks-long build. See §6, Tier A.
 5. **The self-host-only funnel cannot pay for itself, and the arithmetic is not close.** At an industry-standard 1% free→paid conversion, $10k MRR at $10/mo needs ~100,000 active self-hosters — larger than Firefly III's entire installed base after a decade. **Hosted must become the default CTA and the primary revenue line; self-hosting is your trust asset and top of funnel, not your product.** This inverts PRD F18.4. See §7.
 6. **Closed source is a strategic error for the exact audience you're targeting.** You are asking r/selfhosted — the most paranoid software audience alive — to run an opaque binary over their complete bank history. Firefly III, Actual Budget and Ghostfolio are all open. See §7.4.
-7. **Pick one beachhead: cross-border / multi-currency households (Israel + US/EU expats).** You already ship the two things nobody else ships for them (real RTL/Hebrew and true multi-currency), the audience has money and acute pain, and it is defensible against Monarch (US-only) and Firefly (unusable UX). See §8.
+7. **You are not selling a budgeting app. You are selling an answer to a question the household is anxious about.** Planning tools price *above* full PFM suites — ProjectionLab is $129/yr and $1,199 lifetime for a simulator with no ledger under it; Monarch is $99.99 for a complete aggregated PFM. Meanwhile the documented #1 reason people abandon budgeting apps is that they "show data without producing behavior change" and never connect cashflow to a plan. **Your Plan simulator is the answer to the category's biggest churn problem, and no self-hosted competitor has one.** Lead with it. See §8.
+8. **Multi-currency is your targeting filter and your moat — not your pitch.** Correcting v1.0: the cross-border niche is *not* empty. Borderless Budget, FlowFund, Tallyroot, Auritrack and Monavio all launched into it in 2025–26, and Lunch Money serves it natively at a $60/yr minimum — the cheapest price point in the market. Compete on multi-currency and you compete on the discount axis. Use it to *find and hold* customers; sell them the plan. See §8.
+9. **Order the roadmap by retention risk, not feature appeal.** Apps requiring manual entry churn users at **3x** the rate of auto-sync apps; category D30 retention averages 38%. That single number settles the sequencing debate. See §9.
 
 ---
 
@@ -159,8 +162,11 @@ Each item names the profitable product that proves the demand.
 
 ### Tier A — build before any public launch (weeks each, unblocks everything)
 
+> **v1.1:** superseded as a *sequence* by the horizon plan in §9, which orders the same items by retention risk. This table remains the per-item justification.
+
 | # | Feature | Proven by | Why now |
 |---|---|---|---|
+| A0 | **`asset_valuations` time series** (added v1.1) | Kubera, Vyzer — valuation history is the product | Not a gap, a **live defect**: `reported_value` is a scalar overwritten in place, so illiquid assets have no history, chart as flat lines, and feed today's number into every historical and projected figure. Fixes the asset class P0 cares most about. ~1 week. |
 | A1 | **SimpleFIN Bridge ingestion** (user pays $15/yr direct, read-only, no BaaS contract, no credential proxying) | Actual Budget's entire growth story | The single highest-leverage feature in this document. Removes the #1 complaint in every review of every competitor. Preserves your "no bank-credential proxying" non-goal because the user holds the SimpleFIN relationship, not you. |
 | A2 | **GoCardless Bank Account Data (PSD2)** for EU/UK; keep Moneyman for IL | Firefly III's importer ecosystem | Free tier available; makes the cross-border beachhead (§8) real rather than aspirational. |
 | A3 | **OFX/QIF import** (already Planned, F2.1) | Every incumbent | Cheap. Also the migration path off Quicken/Mint exports. |
@@ -206,20 +212,16 @@ Proposed structure:
 | Tier | What | Price | Role |
 |---|---|---|---|
 | **Free — Goaldy Self-Hosted** | Everything in F1–F17. Unlimited. Forever. BYO AI key. | $0 | Trust asset + top of funnel + distribution. Never crippled. |
-| **Goaldy Cloud** | Managed, backed up, updated, PWA, no Docker | **$8–10/mo, $96/yr** | **The primary revenue line.** Prices at the category anchor (Monarch $99.99). |
+| **Goaldy Cloud** | Managed, backed up, updated, PWA, no Docker | **$12/mo, $120–144/yr** + **$449 lifetime** | **The primary revenue line.** Repriced upward in v1.1: you sell planning (ProjectionLab $129, Boldin $144), not budgeting (Monarch $99.99, Lunch Money $60). The lifetime option is copied from ProjectionLab deliberately — privacy-minded buyers self-select into it, and it solves a bootstrapper's cash-timing problem. |
 | **Goaldy.AI** | Chat + MCP + Monte Carlo + proactive nudges. Usage-capped; BYO-key option. | **+$8–12/mo** | Attach-rate expansion on Cloud; license-key unlock for self-hosters (F18.5 architecture stands). |
 | **Household Pro** (Phase 3) | Entities, roles, audit log, documents, advisor sharing, scheduled reports | **$25–40/mo** | §3.2 / §4.2 segments. 10x under Kubera Black. |
 
 Self-hosters can buy Goaldy.AI and Household Pro via the license key. That keeps the promise ("nothing about where your data lives is ever paywalled") intact while giving self-hosters something to pay for.
 
 ### 7.3 Beachhead and sequencing
-**Beachhead: cross-border / multi-currency households — Israeli, Israeli-expat, and dual-country EU/US families.**
+**Beachhead: cross-border / multi-currency households with a decision pending.** Full ICP definition in §8 — the short version is that multi-currency is how you *find and hold* them, and the Plan simulator is what they *pay for*.
 
-Why this and not "privacy-conscious self-hosters" generally:
-- You ship **real RTL/Hebrew** (744 keys/locale) and **true multi-currency with live FX**. Monarch is US-only. Copilot is US + iOS-only. Firefly has multi-currency but no usable UX and no Hebrew UI worth the name. **Nobody is serving this person.**
-- The pain is acute and expensive: two to four currencies, two tax jurisdictions, accounts that no single aggregator covers, and a spreadsheet holding it together.
-- It's reachable: Israeli tech/finance communities, expat forums, Hebrew-language personal-finance channels — concrete, addressable places, unlike "family offices."
-- It's a natural on-ramp to Household Pro: these households disproportionately have entities.
+Correcting v1.0, which claimed nobody serves this person: several 2025–26 entrants do (Borderless Budget, FlowFund, Tallyroot, Auritrack, Monavio), and Lunch Money serves it natively at 160+ currencies with historical rates for a $60/yr minimum. That cohort is simultaneously **evidence the pain is real** (five founders independently built for it) and **evidence it is commoditizing** (low barriers, thin products, race to the bottom on price). The defensible position is not "we do multi-currency too" — it is that none of them are self-hosted, none have a household planning simulator, none have real RTL/Hebrew, and none will ever hold an illiquid asset's valuation history.
 
 **Sequence:**
 1. **Close launch blockers** — A5 Reports, A6 onboarding, A7 backup, A3 OFX/QIF, A8 PWA, plus the public feedback channel (F13.2). ~4–6 weeks.
@@ -252,13 +254,156 @@ Instrument these from day one (privacy-respecting, opt-in telemetry — an anony
 
 ---
 
-## 8. What to do Monday
+## 8. ICP — who the customer is, what hurts, what they'll pay, why us
 
-1. **Delete the family-office ambition from your own head.** Keep the entity layer (B1) — kill the label.
-2. **Re-scope F18.1.** The MCP-as-system-of-record claim needs ingestion behind it or it's a press release. Ingestion *is* the roadmap.
-3. **Decide the license.** This blocks the launch and nothing else can be sequenced around it.
-4. **Start A1 (SimpleFIN).** Highest leverage item in this document.
-5. **Stand up the Cloud beta waitlist** on the landing page before it goes live, so launch traffic has somewhere to convert.
+### 8.1 The one-sentence positioning
+
+> **Goaldy is the private household balance sheet that tells you whether the decision you're about to make actually works — across every currency, account and asset you own.**
+
+Note what is *not* in that sentence: budgeting, categorization, self-hosting, AI. Those are how it works, not why anyone buys.
+
+### 8.2 The evidence that sets the price
+
+| Product | Price | What it sells |
+|---|---|---|
+| Ghostfolio (cloud Premium) | **$48 one-time** | Self-hosted portfolio tracking |
+| Lunch Money | **$60/yr** min (PWYW) | Multi-currency budgeting, indie/bootstrapped |
+| Copilot | $95/yr | Design-led PFM, iOS only |
+| Monarch Core / Plus | $99.99 / $199 per yr | Full aggregated PFM + household collaboration |
+| YNAB | $109/yr | A budgeting *method* |
+| **ProjectionLab** | **$129/yr · $1,199 lifetime · $549/yr advisor** | **A planning simulator with no ledger under it** |
+| **Boldin** | **$144/yr** | Retirement planning + Monte Carlo |
+| Kubera / Kubera Black | $249 / $2,499 per yr | Net worth + entity nesting + MCP |
+| Float / Pulse | $55–59/mo | SMB cashflow forecasting on top of QBO/Xero |
+| Firefly III, Actual Budget | **$0** | Self-hosted budgeting |
+
+**The three readings that matter:**
+1. **Planning out-earns budgeting.** ProjectionLab charges 30% more than Monarch for strictly less product — no accounts, no transactions, no ledger. People pay for the answer, not the record-keeping.
+2. **Multi-currency is the discount axis.** Its specialist charges the least in the table.
+3. **Self-hosting has near-zero willingness to pay on its own.** The two most popular products in that row are free, and the most popular paid one monetizes at $48 *once*.
+
+Goaldy's shipped assets sit on the *expensive* side of that table (a planning simulator, a real balance sheet) and its distribution sits on the *cheap* side (self-hosted, multi-currency). **Price and pitch from the expensive side; distribute from the cheap side.**
+
+### 8.3 P0 — the primary ICP: "The Anxious Balance Sheet"
+
+**Who.** 35–55. Household net worth $250k–$3M. 6–20 accounts spanning **two or more currencies and usually two countries**. Owns at least one asset that isn't a bank balance — an apartment, a pension or keren hishtalmut, RSUs, a foreign brokerage. Technically capable (can follow a Docker quickstart, or would rather just pay for hosting). Israeli, Israeli-expat, EU/US dual-country, or a tech worker paid in a currency they don't live in.
+
+**The decision they're anxious about — this is the actual trigger.** Nobody adopts a finance app because they want a pie chart. They adopt one within weeks of a question they can't answer:
+- *Can we afford to move countries / buy this apartment / put two kids through university?*
+- *If I stop working in four years, does this hold?*
+- *Am I actually richer than last year, or is that just the shekel?*
+
+**The pain, specifically.**
+1. **Their net worth is unknowable.** Assets in 2–4 currencies, an apartment whose value is a guess, a pension nobody can read. No single aggregator covers their institutions. The truth lives in a spreadsheet they update quarterly and don't trust.
+2. **Every app they've tried is single-country.** "Most personal finance apps are built for one country. They connect to one country's banks, track one currency, and give advice relevant to one tax system." For them these apps are structurally useless, not merely inconvenient.
+3. **The apps that do work show only the past.** The documented #1 churn cause across the category: apps that "show data without producing behavior change… do not tell them what to do next, do not connect cash flow to broader financial planning." That is exactly the gap between a ledger and a decision.
+4. **They will not upload their complete balance sheet to a US startup.** For this cohort specifically — dual-jurisdiction, often with a real reason to be careful — this is a hard constraint, not a preference.
+
+**What they'll pay.** **$120–144/yr for Cloud**, or **$449 lifetime**. They already pay for Wise, an accountant, sometimes a one-off financial plan at $1,500+. Goaldy at $12/mo is not competing with Monarch's $8/mo in their head — it is competing with the spreadsheet, and with the advisor they don't want to hire.
+
+**Why us, honestly — three claims, all currently defensible:**
+| Claim | Who else has it |
+|---|---|
+| A household planning simulator wired to a real ledger | ProjectionLab has the simulator, no ledger. Monarch has the ledger, only goal-tracking. **Nobody has both.** |
+| True multi-currency + real RTL/Hebrew + an illiquid-asset valuation history | Lunch Money has multi-currency. Nobody has the combination, and nobody will have valuation history until you ship §Feature 1. |
+| Runs entirely on infrastructure they control | Firefly and Actual — neither of which has planning or a usable UI |
+
+**Where we are genuinely weaker, and must fix:** no automated ingestion (existential — see §9), no holdings, no valuation history, no reports, a "Coming soon" nav item.
+
+### 8.4 S1 — "The Homelab Household": distribution, not revenue
+
+Runs a NAS and 20 containers; has already tried Firefly III and bounced off its accounting model, or Actual Budget and rejected its envelope religion. Reachable in one place (r/selfhosted, 790k members, 98.3% containerized) at near-zero cost.
+
+**Pain:** the self-hosted finance category is functional and ugly; the pretty products are cloud-only.
+**Will pay:** ~$0. Budget them at **0.3–0.5% conversion** and treat everything above that as luck.
+**Their real value:** launch velocity, GitHub stars, awesome-selfhosted inclusion, bug reports, and — critically — **credibility with P0**, who reads those forums before trusting anyone with their finances.
+**The rule:** serve them completely and cripple nothing, but never let their feature requests set the roadmap. They will ask for double-entry, plain-text export and a CLI. P0 will not.
+
+### 8.5 S2 / S3 — expansion segments (Phase 3, not now)
+
+- **S2 "Pre-family-office household"** — $2M–$20M, 2–6 legal entities, no staff, a spreadsheet. Needs entities, holdings, documents, audit log, advisor read-only. **$25–40/mo.** Reachable *only* as an upsell out of P0; unreachable cold. (§3.2)
+- **S3 "Owner-operator"** — founder/freelancer/landlord who is both the business's and the household's CFO. Served by the *same* entities feature as S2. **Never build AR/AP/VAT/payroll.** (§4.2)
+
+### 8.6 The anti-ICP — say no out loud
+
+**The US-only budget-app switcher.** The post-Mint refugee looking for a Monarch alternative. Do not chase them: they want one-click aggregation across 12,000 US institutions that you cannot match, they price-anchor at $8/mo, they churn at 62% by day 30, and they will never self-host. Every feature request from this segment pulls you toward being a worse Monarch.
+
+---
+
+## 9. The feature roadmap, ordered by retention risk
+
+The ordering principle, stated once: **apps requiring manual entry lose users at 3x the rate of auto-sync apps, and category D30 retention averages 38%.** Features are therefore sequenced by how much churn they remove, not by how interesting they are to build.
+
+### H1 — "Tell no lies" (next ~6 weeks)
+*Theme: everything the product currently claims should be true. This is a credibility gate on the public launch, not a growth phase.*
+
+| Item | Why it's here |
+|---|---|
+| **`asset_valuations` time series** | Fixes a live correctness defect: `reported_value` is a scalar overwritten in place, so illiquid assets chart as a flat line and editing a property value retroactively rewrites net-worth history. P0's core asset class is exactly the one currently modelled wrong. Add purchase price/date for appreciation % nearly free. |
+| **Reports page** (retire the "Coming soon" stub) | A visible stub is read as abandonware by S1 on launch day |
+| **Onboarding + localized starter tag tree** | Empty state is where the category loses people before D1 |
+| **Encrypted scheduled backup** | "Own your data" is a liability until it's "safely" |
+| **PWA installability** | Two files; removes the "no mobile app" objection |
+| **Public feedback channel** | A closed distribution with no way to report a bug reads as dead |
+
+**Exit criterion:** a stranger can install, import, and reach one true insight without hitting a stub or a wrong number.
+
+### H2 — "Stop the bleeding" (~Q1 2027)
+*Theme: remove the 3x churn multiplier. This is the single highest-ROI horizon in the plan.*
+
+- **SimpleFIN Bridge** ingestion (user holds the $15/yr relationship — preserves the no-credential-proxying non-goal)
+- **GoCardless Bank Account Data (PSD2)** for EU/UK; Moneyman continues for IL
+- **OFX/QIF import** — also the migration path off Quicken/Mint exports
+- **Recurring / subscription detection + upcoming-cashflow calendar** — the most-cited "wow" feature in Monarch and Copilot reviews, and pure logic over data you already hold
+- **Automated transfer peer-matching** — cross-currency transfers currently read as phantom income/expense, which is P0's most visible daily annoyance
+
+**Exit criterion:** D30 retention of connected accounts ≥40%. If this horizon doesn't move that number, nothing downstream matters.
+
+### H3 — "Answer the question" (~Q2 2027) — *the monetization horizon*
+*Theme: ship what P0 actually pays for, and open Cloud.*
+
+- **Plan promoted to a first-class surface**, not a nav item — the answer to the anxious question belongs on the dashboard, in the onboarding, and in the marketing
+- **Monte Carlo / range-based projection** — a probability band, not one deterministic line. This is the direct ProjectionLab comparable and justifies the $129–144 price point
+- **Insight-to-action**: the Plan engine already computes required monthly savings and the first danger year — surface it as a move, not arithmetic
+- **Holdings-lite**: symbol/qty/cost basis + daily price → allocation, unrealized P&L, and an auto-written valuation row. Explicitly punt tax lots, corporate actions, TWR/IRR; label it a tracker, not a book of record
+- **Scheduled email/PDF report** — recurring re-engagement, and the hook for advisor sharing later
+- **Goaldy Cloud GA** at $12/mo · $120–144/yr · $449 lifetime
+
+**Exit criterion:** 100 paying subscribers. This is the go/no-go for the whole commercial thesis (§7.5).
+
+### H4 — "Expand the household" (~Q3 2027)
+*Theme: raise ARPU on an existing base; open S2/S3 without a new GTM motion.*
+
+- **`entities` / ownership layer** — the single highest-value unbuilt feature after ingestion; opens S2 and S3 with one table
+- **Multi-user roles** (partner / accountant read-only / advisor read-only) — `users` table already exists; Monarch's collaboration is its top retention driver
+- **Document attachments** + full-text search (SQLite FTS5)
+- **Audit log** — non-negotiable for anyone with an accountant
+- **Accountant export pack** by entity by period — turns the accountant from a blocker into a channel
+- → ships as **Household Pro, $25–40/mo**
+
+### H5 — "Agents" (~Q4 2027)
+*Theme: last, deliberately.*
+
+- **MCP server** over the existing OpenAPI surface; read-only by default, write scopes opt-in
+- **Chat / ask-your-ledger**, BYO API key free and self-hosted, managed and usage-capped on Cloud
+- **LLM-assisted categorization** for what the rules engine misses (`category_source='ai'` finally used)
+- **Proactive goal-drift push**
+
+**Why last, when the PRD has it as the first paid layer:** Kubera and Era already ship MCP over aggregated portfolios, so this is parity rather than a wedge; the pitch depends entirely on ingestion breadth that doesn't exist until H2; managed inference on a $12/mo product is a gross-margin risk; and **AI does not fix a 62% D30 churn rate — ingestion and a reason to come back do.** Ship it into a retained, paying base or don't ship it.
+
+### Permanently out of scope
+AR/AP/invoicing, VAT/tax filing, payroll, statutory double-entry, tax optimization, bank-credential proxying, trade execution, partnership/GL accounting, capital calls, a native mobile app, and anything requested primarily by S1 that P0 would not use.
+
+---
+
+## 10. What to do Monday
+
+1. **Adopt the positioning sentence in §8.1 and rewrite the landing-page pitch (PRD F14) against it.** You sell the answer to a decision, not a budgeting app. Everything else on this list is downstream of that call.
+2. **Commit to P0 (§8.3) in writing, and to the anti-ICP (§8.6) out loud.** Half this document's value is the features you now get to refuse.
+3. **Decide the license.** Still blocking, still unsequenceable around. (§7.4)
+4. **Start H1 with `asset_valuations`.** One week, fixes a correctness defect that is live on the public demo, and it's the prerequisite for holdings and entities both.
+5. **Stand up the Cloud waitlist** on the landing page before launch traffic arrives, priced at $120–144/yr with a $449 lifetime option — not the $96 in v1.0.
+6. **Instrument the §7.5 metrics now**, especially D30 retention of connected accounts. That is the number that decides whether H3 is worth building.
 
 ---
 
