@@ -570,54 +570,81 @@ router.post("/", (req, res) => {
 - The batch runs inside one `db.transaction()` — 200 rows insert in a few ms and either all validation-passing rows commit or the process errors cleanly.
 - Auth is the standard bearer token or session (see §4.5), not a bespoke API key check.
 
-### 4.4a File Import — the adapter registry
+### 4.4a File Import — the four-stage pipeline
 
 `POST /api/transactions` (§4.4) is the ingest primitive for structured data that is already
 in Goaldy's shape. **File import is a layer above it**, because a bank's CSV, an Excel
 workbook or a QIF file has to be turned into that shape first — and the user has to see what
 will happen before it does.
 
-**One contract, five adapters.** `lib/server/importers/` holds an `IMPORT_ADAPTERS` registry
-keyed by id (`csv`, `xlsx`, `qif`, `json`, `buxfer`). Each adapter declares the files it
-needs and whether it needs column mapping, and exposes a single `parse()`:
+**Formats and entities are independent axes**, which is the whole architecture. The old
+design had one adapter per *vendor*, so every combination of source and destination needed
+its own code, and a vendor changing its export silently broke detection. Now:
 
-```typescript
-interface ImportAdapter {
-  id: string
-  label: string
-  requiredFiles: { key: string; label: string; accept: string }[]
-  needsMapping: boolean
-  budgetsFile?: { key: string; label: string; accept: string }   // Buxfer only
-  parse(files, config?): ParsedImport | Promise<ParsedImport>
-}
-```
+| Stage | Module | Input → output | Touches the DB? |
+|---|---|---|---|
+| Read | `readers/` (csv, xlsx, json, qif) | bytes + `ParseOptions` → `SourceTable` | No |
+| Map | `mappers/` (transactions, accounts, tags, budgets) | `SourceTable` + `MapConfig` → `Normalized*[]` | No |
+| Resolve | `refs/` | natural keys → ids, per binding | Reads (`plan`) or writes (`commit`) |
+| Plan / commit | `run.ts` | resolved rows → `ImportPlan` or `ImportResult` | Reads only / writes |
 
-**Adapters never touch the database.** `parse()` is pure: bytes in, a `ParsedImport` out
-(normalized accounts, tags, transactions and optional budgets, all keyed by *external* keys,
-never database ids). That is what makes every adapter unit-testable without a DB, and it is
-why adding OFX later is a self-contained module rather than a change to the pipeline.
+A reader knows nothing about entities; a mapper knows nothing about formats. **Adding OFX is
+one new reader** — no wizard change, because the UI renders from the format and entity
+registries rather than from hardcoded per-vendor knowledge.
 
-**Three stages, in order:**
+**`planRun` and `commitRun` share one `prepare()`**, differing only in the `ResolveMode`
+passed down. That is the structural guarantee that the preview predicts the commit: they
+cannot drift into two resolution policies, because there is only one.
 
-| Stage | Function | Touches the DB? |
-|---|---|---|
-| `parse` | adapter-specific, bytes → `ParsedImport` | No |
-| `planImport` | resolves accounts/tags against existing rows, computes duplicates, builds a ≤20-row preview | Reads only |
-| `commitImport` | creates accounts and tags, ingests transactions, sets budgets | Writes |
+**One file is one entity per run.** That decision buys reference resolution against the live
+database — no in-flight symbol table, no dependency graph inside a commit — and it is what
+makes order independence achievable: every entity import is an **upsert on its natural key**
+(accounts by name, then account number as a rename fallback; tags by full path; transactions
+by `import_hash`), never a blind insert.
 
-The preview the user approves is `planImport`'s output; `commitImport` then performs it.
-Preview and commit share their file-parsing and budget-merge code paths deliberately — any
-divergence between them means the preview lies about what the commit will do.
+**The one exception to order independence** is an account's opening balance.
+`adjustBalance({ method: 'opening' })` recalibrates an account's whole total, so applying it
+to an account that already carries imported transactions would erase that history from the
+reported balance. It is therefore applied only by the run that *created* the account, and
+skipped with a per-account warning otherwise. The entity data converges in any order; this
+one derived figure cannot, and `buxfer-acceptance.test.ts` pins both halves against a real
+5,734-row export.
 
-**Shared column mapping.** `csv`, `xlsx` and `json` all funnel through one `mapRowsToTransactions`
-(`row-mapper.ts`), so there is exactly one place that decides what a "date" or "amount" column
-means. XLSX flattens its first *visible* sheet to a string matrix first; JSON addresses fields
-by name (a column may carry a `sourceKey` when the document's field names differ from the
-role names).
+**Cross-references are one mechanism.** A reference field's value is resolved against
+existing rows per a `ReferenceBinding` (`matchBy`, `onMissing`, `onAmbiguous`). Resolution
+answers "what happened to this *value*"; a separate pure step (`apply.ts`) answers "what
+happens to this *row*", which is the only place `onAmbiguous` and `onMissing: skipRow |
+leaveNull` are consumed. **Ambiguity never creates** — minting a duplicate to resolve an
+ambiguity is how an import corrupts a ledger irreversibly.
+
+**The required-field gate has one implementation and two callers.** `resolveState` /
+`isSatisfied` (`mappers/resolve.ts`) is read by the wizard's disabled Continue *and* by
+`ImportConfigSchema`'s `superRefine`, so the affordance and the guarantee cannot disagree. A
+required field is satisfied by a column **or** a constant; the API returns 400 naming every
+unresolved field, with machine field keys alongside the prose so the ledger can highlight
+rows without parsing translated text.
+
+**Requirements a per-field boolean cannot express are declared as data.** A transaction's
+amount is satisfied by `amount` *or* `amountOut`/`amountIn`; a tag by `path` *or* `name`.
+Both live on the mapper as `alternations`, read by the gate and the ledger alike, so a new
+entity cannot forget one.
+
+**Presets are data.** `presets/` holds built-ins (Mint, YNAB, Buxfer × 4) and the user's
+saved mappings in one shape, applied by one code path. Columns are addressed by **header
+name**, never index, so a vendor reordering or inserting a column cannot silently remap
+every field after it. Detection is a strict superset check over header hints, never a fuzzy
+score: a confidently wrong preset is worse than none.
 
 **Format detection** sniffs content before extension — a bank that names its Excel export
 `.csv` is common enough that trusting the extension misroutes the file. Detection returns
 `null` rather than guessing when the shape is ambiguous, and the wizard asks.
+
+**A commit is one transaction**, via `withTransaction()` (`db.ts`) rather than
+`db.transaction()`, which takes a synchronous callback and would commit before an async
+pipeline finished. The rule it enforces: **structural failures roll back, per-row rejections
+still degrade** — a rejected budget row, a malformed tag path and an inapplicable opening
+balance all warn and continue, because turning those into total import failures would be
+strictly worse than the partial write atomicity prevents.
 
 ### 4.4b Dedup modes
 
@@ -682,7 +709,16 @@ byte-exactness forbids both. `preflightRestore` decides, `restoreBackup` execute
 |---|---|
 | `malformed` — not an object, no `tables`, a table name outside `BACKUP_TABLES`, or a row that is not an object | 400 |
 | `schema-mismatch` — the document's `schemaVersion` differs from `meta.schema_version` | 400 |
-| `ledger-not-empty` — counted over `LEDGER_TABLES` | 409, which the UI turns into an explicit wipe-and-restore offer |
+| `ledger-not-empty` — counted over `LEDGER_TABLES` | 409, carrying per-table destroy counts so the UI's wipe-and-restore prompt states its blast radius rather than asserting it |
+
+**The wipe and the restore are ONE transaction.** They used to be two — `deleteAll
+FinancialData()` opened its own, then `restoreBackup()` opened another — so a document that
+cleared preflight and then failed the restore's own `foreign_key_check` left the user with an
+empty ledger and nothing restored, strictly worse than either outcome alone. The gap is
+reachable because preflight validates shape and schema version while the FK check runs inside
+the restore. Both halves now expose transaction-participating forms so the route owns a single
+transaction over the pair; the unknown-table validation lives in the *inner* function, so a
+caller reaching for that form cannot skip an injection guard.
 
 **Restore runs as one transaction** with `PRAGMA defer_foreign_keys = ON` (not
 `foreign_keys = OFF`, which is an outside-transaction control and would let a `DROP` cascade

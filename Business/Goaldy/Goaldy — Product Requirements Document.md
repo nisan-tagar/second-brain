@@ -358,39 +358,72 @@ exception: **navigation resets, drill-down preserves.**
 
 ### F7 — Import
 
-**Supported formats (all shipped):**
+**Formats and entities are independent axes.** A format says how bytes become a table of
+rows; an entity says which Goaldy records those rows describe. Any format can feed any
+entity, which is what replaced the old per-vendor adapter registry.
 
 | Format | Notes |
 |---|---|
-| CSV | Israeli banks and generic, via interactive column mapping |
-| XLSX | First *visible* sheet, flattened through the same column mapping as CSV |
-| QIF | Tagged-line format; bracketed `L[Account]` transfers synthesise the second leg |
-| JSON | An array of objects; a column may name its own `sourceKey` when the document's field names differ from the roles (`txn_date`, `amt`, …) |
-| Buxfer | Three-file export (accounts + tags + transactions), plus an optional `budgets.csv` |
+| CSV | Israeli banks and generic, with encoding and delimiter as visible, correctable options |
+| XLSX | Sheet selectable when the workbook has more than one |
+| QIF | Tagged-line format with fixed synthetic columns; carries no account, so one is chosen in the ledger |
+| JSON | An array of objects; keys become columns |
 
-**Not built:** OFX. It was listed here through Phase 0 planning but no adapter exists;
-adding one is a self-contained follow-up (a new module under `lib/server/importers/`
-registered in `IMPORT_ADAPTERS` — the wizard needs no change).
+| Entity | Required fields |
+|---|---|
+| Transactions | date, an amount (one signed column **or** money-in/money-out), account |
+| Accounts | name |
+| Tags | a name **or** a full path |
+| Budgets | tag, amount, period |
 
-**One wizard, two entry modes.** The same modal serves both, differing only in whether it
-opens on the platform picker:
+**One file is one entity per run, and order does not matter.** Importing transactions
+before accounts gives the same ledger as the other way round, because every entity import
+is an upsert on its natural key rather than a blind insert. **One exception:** an
+account's opening balance is applied only by the import that created the account —
+applying it to an account that already has transactions would erase that history from the
+reported balance, so it is skipped with a warning naming the account.
 
-- **Statement mode** — the target account is locked; no platform picker. Opened by the
-  transaction table's upload action, both on a standalone `/transactions` view and on an
-  account view (where the account is pre-locked).
-- **Migration mode** — from Settings → Data → "Import Financial Data", or the Add menu.
-  Starts on the format picker.
+**Not built:** OFX. Adding one is now a single new reader under
+`lib/server/importers/readers/`; the wizard needs no change, because it renders from the
+format and entity registries rather than from hardcoded knowledge.
 
-**Import flow:**
+**One wizard: File → Map → Review → Done.** There are no modes. An entry point supplies a
+partial config instead — the account view answers "which account" up front and leaves the
+rest to the ledger; Settings → Data and the Add menu answer nothing.
 
-1. Pick file → auto-detect format from content, not extension (a bank that names its Excel
-   export `.csv` is common enough that trusting the extension misroutes it). Detection
-   returns "unsure" rather than guessing, and the user picks.
-2. If the format needs mapping: interactive column mapping.
-3. If a `budgets.csv` is attached: budget settings step (period, currency, start date).
-4. Preview up to 20 resolved rows, with duplicates marked, plus counts of accounts and tags
-   to be created and budgets to be set.
-5. User confirms → written to SQLite.
+**The Map step is the feature.** It shows **one row per Goaldy field, always all of
+them**, reading left-to-right *your file → Goaldy*, with live values from the file under
+every picker so a wrong choice is visible immediately rather than after a failed import.
+Unused columns are named in a quiet "Not imported" list, never silently dropped.
+
+**A required field is satisfied by a column *or* a fixed value.** This is what makes a
+file usable when it simply lacks something Goaldy needs, and it is not rare: a Buxfer
+budgets export carries no period, and QIF and YNAB register exports carry no account. The
+fixed-value editor is a picker over the allowed values for an enum field and a picker over
+existing accounts or tags for a reference field, so neither can be mistyped.
+
+**The wizard will not advance while a required field is unresolved.** It shows
+"Required — n of m resolved", states the remedy on the offending row ("Pick a column or
+set a fixed value") rather than an error, and says how many remain on the disabled
+Continue. The same check runs server-side and returns 400 naming *every* unresolved
+field, since the API is reachable without the UI.
+
+**Cross-references.** A column naming an account or a tag is resolved against what already
+exists. Per binding, the user chooses how to match (name, account number, path, id) and
+what to do when nothing matches: **create it**, **skip those rows**, or — where the field
+is optional — leave it blank. Ambiguity never creates: two accounts named "Savings" makes
+a row ambiguous, not a third "Savings".
+
+**Everything that will be created is named before the commit.** The Review step lists each
+value and how many rows carry it. This is the information that turns "1,665 transactions
+point at accounts that do not exist" from a discovery after the fact into a decision
+before it.
+
+**Presets.** Built-in mappings for Mint, YNAB and Buxfer (accounts, tags, transactions,
+budgets) are suggested automatically when a file's header row matches, and a user can save
+their own. A preset addresses columns by header *name*, so a vendor reordering or adding a
+column does not silently remap every field. A preset never fills in a value that is the
+user's own decision — the Buxfer budgets preset leaves the period blank on purpose.
 
 **Dedup — three modes:**
 
@@ -407,9 +440,11 @@ the row as `import_hash`. Re-importing the same file is a no-op. A row deliberat
 re-admitted is stored with a null hash, since the column is UNIQUE — the original still
 dedups against future imports.
 
-**Budget import.** A Buxfer `budgets.csv` sets budgets by tag path. Budgets are leaf-only:
-a parent-tag row (which real Buxfer exports contain) is warned and skipped rather than
-failing the import.
+**A commit is all-or-nothing for structural failures, forgiving for per-row ones.**
+Budgets are leaf-only, and a parent-tag row (which real Buxfer exports contain) is warned
+and skipped rather than failing the import; the same holds for a malformed tag path and an
+inapplicable opening balance. Anything that would leave the ledger inconsistent rolls the
+whole run back instead.
 
 ### F8 — Settings
 
@@ -420,15 +455,47 @@ failing the import.
 - Date format (DD/MM/YYYY vs MM/DD/YYYY)
 - Language (English, Hebrew)
 
-**Data:**
+**Data — two labelled areas plus a danger zone.** The grouping is the point: the areas
+answer genuinely different questions, and nothing in one is needed while working in the
+other.
 
-- **Import financial data** — opens the import wizard in migration mode (see F7).
-- **Export financial data** — see F9.
-- **Restore from backup** — see F9.
-- **Delete all financial data** — wipes the 12 financial tables (transactions, accounts,
-  tags, budgets, rules, plan items, notifications and their join tables) while preserving
-  `settings`, `sessions`, `plan_settings` and `meta`, so the install stays logged in and
-  configured. Requires an explicit typed confirmation.
+*Reconciliation* — how incoming data is matched and merged. **This applies to every import
+AND every connected integration**, not only the wizard, which nothing on screen used to
+say.
+
+- **Duplicate detection** — which fields decide that two transactions are the same.
+- **Transfer resolution** — what happens when two transactions look like one transfer.
+
+*Import & export* — the actions that move data.
+
+- **Import a file** — see F7.
+- **Export data** — see F9.
+- **Saved mappings** — reuse a column mapping set up before. Deliberately **not** part of a
+  backup: a backup holds financial data, not preferences, and the help says so.
+- **Restore from backup** — see F9. It lives here rather than in the danger zone: a
+  destructive *action* with its own confirmation is not the same thing as a destructive
+  *setting*. Its row states "Replaces the ledger" inline.
+
+*Danger zone* — two actions with fixed, named scopes rather than one action whose blast
+radius depends on a checkbox, so a destructive operation is identifiable by its name alone.
+
+| Action | Erases | Keeps |
+|---|---|---|
+| **Delete financial data** | the 12 financial tables — accounts, transactions, tags, budgets, rules, plan items, notifications and their join tables | settings, sign-in, plan settings |
+| **Reset app data** | the above, **plus** preferences: duplicate criteria, transfer mode, locale, saved mappings | sign-in, household members, and the API token |
+
+**Neither can lock the user out, by construction.** Sign-in survives both, so there is
+never a return to first-boot setup — where the new token would be printed only to the
+server console, permanently locking out anyone who administers the instance through a
+browser. The deployment's API token survives both too, so connected integrations keep
+working; resetting clears preferences, not credentials. Each requires a typed confirmation
+that states its own precise scope.
+
+**Help is two tiers.** Every row carries an always-visible line that is *sufficient to act
+on*; an info button opens the specifics for the settings whose real behaviour cannot
+honestly compress to a line. **Nothing that changes what the user would decide lives only
+behind that button.** The danger zone has no help modal on purpose — its specifics belong
+in the confirmation the user is already reading.
 
 
 ### F9 — Export, Backup and Restore
@@ -462,9 +529,13 @@ This is the foundation future backup features build on.
 **Restore** (Settings → Data) refuses rather than half-applies. It rejects a document whose
 schema version differs from the running one, a malformed document, and a portable copy
 (which is not restorable by design). If the ledger is not empty it returns a conflict and
-offers wipe-and-restore as an explicit, confirmed choice. Any failure mid-restore rolls back
-entirely — a partly-restored ledger is worse than a refused one, because the user cannot tell
-what is missing.
+offers wipe-and-restore as an explicit, confirmed choice, stating per-table how many rows
+that would destroy rather than asserting the risk in the abstract.
+
+**The wipe and the restore are one transaction.** They used to be two, which meant a
+document that passed validation and then failed partway through left an empty ledger and
+nothing restored — worse than either outcome alone. Now any failure rolls back to exactly
+what the user had, and a regression test proves it by failing against the old behaviour.
 
 **Portable round trips are lossless for what they carry.** Budgets restore their full
 generation history, including generations that ended early. Goals, rules, household members
