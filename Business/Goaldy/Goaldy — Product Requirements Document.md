@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-05 v2.7        |
-| **Version**      | 2.7                    |
+| **Last Updated** | 2026-09-10 v2.8        |
+| **Version**      | 2.8                    |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -25,6 +25,7 @@
 |2.5|2026-08-29|**F18 (Goaldy.AI) added — the first documented monetization plan for the product.** Product/marketing strategy work concluded that Goaldy stays free and self-hosted forever, with a separate opt-in paid layer (Goaldy.AI) sold as a subscription: an in-app assistant scoped to one instance's own data (categorization assist, insight-to-action recommendations against the Plan simulator, range-based risk simulation, proactive goal-drift nudges) plus a higher, MCP-enabled tier that exposes an instance's harmonized accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, etc.) — positioned as a system-of-record layer for users who already run per-institution agents/MCPs but lack any cross-account, goal-aware memory between sessions. Tax optimization was evaluated and explicitly excluded as a separate, higher-liability product. §3 Non-Goals: the blanket "no Stripe, no paid tiers" line is corrected — monetization is now planned, gated through a small externally-run licensing service (Stripe-backed, signed offline-verifiable entitlement tokens) kept structurally separate from the single-tenant self-hosted app, never touching a user's financial data. §4 Current State Summary: "monetization" removed from the never-built/no-roadmap bucket.|
 |2.6|2026-08-29|**Free-tier roadmap items added across F2, F4, F6, F10, F13, F15, F17**, carrying the same product/marketing strategy session's conclusions for what ships ahead of (and independent of) Goaldy.AI: F2.1/F2.4 — OFX/QIF import, a SimpleFIN bridge, and automated transfer peer-matching all marked Planned (the ingestion items are also named prerequisites for F18.1's "harmonizes every account" MCP pitch to hold up). F4.4 — a localized starter tag tree and a config-only rule/tag-tree template exchange (cross-referenced to F18.6) planned against the empty-tag-tree problem. F6.4 (new) — a recurring/upcoming-transaction preview, planned as an extension of the existing rules engine. F10 and F15.2 — both stubs explicitly flagged as launch blockers to close before any public GTM push, not just open gaps. F13.2 — a planned feedback/issue-reporting channel, needed because the app is closed-source and therefore carries no GitHub Issues tab by default. F13.3 — a planned one-click encrypted scheduled backup, replacing the manual `docker compose cp` step. F17 — PWA installability reclassified from "not currently planned" to Planned.|
 |2.7|2026-09-05|**Market analysis and GTM strategy split out into its own document** — `Goaldy — Market Analysis and GTM Strategy.md` (v1.0), covering the competitive landscape (mass-market PFM, self-hosted/OSS finance, HNW net-worth dashboards, family-office platforms, SMB cash-flow forecasting), a feature-gap analysis ranked by revenue proximity vs. build cost, and the free-tier go-to-market plan. Three findings bear directly on this PRD and are flagged here rather than silently changing F18, because they are recommendations pending a CEO decision, not shipped scope: (1) **F18.1's positioning claim is now contested** — Kubera ships an MCP surface over an entity-nested portfolio at $249/yr and Era ships MCP over aggregated accounts, so "harmonized system of record for external agents" is parity rather than a wedge, and the F2.1 ingestion work the section already names as a prerequisite is re-classified as the load-bearing item. (2) **F18.4 (hosted instance as an optional add-on to Goaldy.AI) is recommended for inversion** — a managed hosted tier is proposed as the primary revenue line with Goaldy.AI as an attach-rate expansion, on the arithmetic that a self-host-only funnel at industry-benchmark 0.3–3% free→paid conversion cannot reach a viable subscriber count. (3) A proposed **`entities`/ownership layer** (accounts belonging to a person/trust/LLC/company, with consolidate-or-filter) is identified as the single highest-value unbuilt feature after automated ingestion, serving both the pre-family-office HNW household and the owner-operator persona; **family-office and SMB accounting are both rejected as primary segments** in that document. No feature section is changed by this revision — F18 stands as written until those decisions are made.|
+|2.8|2026-09-10|**Monetization direction reversed to self-hosted-first; F18 restructured, three non-goals added.** The strategy work concluded in `Goaldy — Market Analysis and GTM Strategy.md` v2.0: ship an excellent self-hosted product, closed source, free and instrumented; sell only a $25 supporter tier at first; let observed demand decide what is built and hosted next. Consequences for this PRD. **F18 (Goaldy.AI) is demoted from "the first paid layer" to a free-tier capability** — in-app chat, LLM-assisted categorization and the MCP server all ship **free with a bring-your-own API key**, because a capability a coding agent produces in a week is reproducible by every competitor's agent (Kubera and Era already ship MCP), because gating an API over a local SQLite file is unenforceable, and because MCP registries are a discovery channel rather than a product. Only *managed inference* would ever be metered. **F18.4 (hosted instance) and the F18.5 licensing service are deferred**, not cancelled — hosting makes the business a controller of financial personal data with duties that an `AS IS` licence cannot disclaim (Israel PPL Amendment 13, in force 14 Aug 2025; GDPR breach notification; DPIA; EU region choice), and nobody has yet paid for Goaldy at all. **New non-goal: Goaldy never handles, stores, or proxies bank credentials** — aggregation is always via a licensed third party the user consents to directly (GoCardless is an authorised AISP; SimpleFIN's relationship is with the user), which also means the app calls the aggregator itself and no connector service of ours holds tokens. **New non-goal: portability, correctness and security are never paywalled** — export, backup, restore and the REST API are portability, and the byte-identical backup/restore guarantee is now positioned as the product's central trust artifact in place of source availability. **New: opt-in telemetry and an update check** (F13.4), the app's first outbound calls on its own behalf — disclosed payload, inspectable in Settings, bucketed counts, no monetary or free-text fields. F14 (Landing Page) gains the desktop-app waitlist and the export-guarantee pitch. §4 updated.|
 
 ---
 
@@ -473,9 +474,20 @@ half-finished afterthought.
 
 ## F18 — Goaldy.AI (Roadmap, not yet built)
 
-> **Under review (2026-09-05).** See `Goaldy — Market Analysis and GTM Strategy.md` §5 and §7: F18.1's
-> positioning is contested by Kubera's and Era's shipped MCP surfaces, and F18.4's hosted-instance-as-add-on
-> is recommended for inversion into the primary revenue line. This section is unchanged pending that decision.
+> **Restructured 2026-09-10 (v2.8) — decision taken.** See `Goaldy — Market Analysis and
+> GTM Strategy.md` v2.0 §7. **F18.2 (chat, AI categorization) and F18.3 (MCP server) move
+> to the FREE tier, with a bring-your-own API key.** Reasons: the capability is
+> commoditized (Kubera and Era ship MCP today); gating an API over a local SQLite file is
+> unenforceable and stops nobody; MCP registries are a discovery channel; BYO-key carries
+> the lowest liability, since the user's relationship is with the model vendor, not us.
+> Only *managed inference* would ever be metered. **F18.4 (hosted instance) and F18.5
+> (licensing service) are deferred, not cancelled** — hosting makes us a controller of
+> financial personal data with duties an `AS IS` licence cannot disclaim, and no one has
+> yet paid for Goaldy at all. F18.5's design stands for whenever a paid tier ships; the
+> first thing it would gate is a local Pro feature set (entities, roles, audit log,
+> documents), not the AI surface. F18.6 (config sharing) is superseded by the broader
+> import-adapter plugin API, which is how community bank coverage is obtained without
+> open-sourcing the core.
 
 **Not built.** This section documents the product direction agreed for the first paid
 layer on top of Goaldy, arrived at through product/marketing strategy work — it is a
@@ -575,7 +587,15 @@ Confirmed current, replacing the old table:
 - No Postgres or any database beyond the one SQLite file.
 - No Israeli-specific financial-instrument account types or cards.
 - No paid tier, Stripe integration, or AI feature exists **in the self-hosted app today** — see F18 for the planned Goaldy.AI subscription layer, which is roadmap, not shipped, and is architected as a separate service rather than something built into `goaldy.db`.
-- No native mobile app.
+- No native mobile app. (A desktop application wrapping the existing server is a deferred
+  distribution option, triggered by waitlist demand — see F14 and TDD §14.2. It is packaging,
+  not a second product.)
+- **Goaldy never handles, stores, or proxies bank credentials.** Aggregation is always via a
+  licensed third party the user consents to directly (SimpleFIN, or GoCardless as an
+  authorised AISP), called by the user's own instance. No service of ours holds bank tokens.
+- **Portability, correctness and security are never paywalled.** Export, backup, restore, the
+  REST API and the MCP server are portability and ship free forever; so does every bug fix.
+  Paid tiers may only ever cover convenience, collaboration, scale, and compute we pay for.
 - No bank-credential proxying or broker integrations — bring your own data via CSV, the Buxfer CLI, or the Moneyman webhook.
 - No envelope budgeting or forced methodology.
 - No transaction execution (read-only financial intelligence; no payments initiated by the app).
@@ -599,7 +619,7 @@ Rather than a forward-looking phased SaaS rollout (the old §5), here is what's 
 
 **Market and GTM strategy:** documented separately in `Goaldy — Market Analysis and GTM Strategy.md` (competitive landscape, segment verdicts, ranked feature gaps, free-tier GTM plan, launch metrics and kill criteria).
 
-**Planned, not yet built (paid):** Goaldy.AI (F18) — an opt-in paid layer (in-app AI assistant, an MCP server for external agents, an optional hosted instance) gated by a separately-run licensing service. AI categorization (F5.2) is part of this plan rather than a dead schema seam.
+**Planned, not yet built (free, BYO API key):** the Goaldy.AI surface (F18) — in-app chat, LLM-assisted categorization and an MCP server, all free per v2.8. **Deferred (paid, not scheduled):** a hosted instance, E2EE sync, managed accounts, and a local Pro feature set (entities, roles, audit log, documents) gated by the F18.5 licensing service — each with a documented demand trigger in the GTM doc §7.2 rather than a date. Superseded text follows for history: Goaldy.AI (F18) — an opt-in paid layer (in-app AI assistant, an MCP server for external agents, an optional hosted instance) gated by a separately-run licensing service. AI categorization (F5.2) is part of this plan rather than a dead schema seam.
 
 ---
 

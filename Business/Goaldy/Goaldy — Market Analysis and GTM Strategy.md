@@ -1,9 +1,9 @@
 | Field            | Value                                      |
 | ---------------- | ------------------------------------------ |
 | **Created**      | 2026-09-05 14:00 UTC                       |
-| **Last Updated** | 2026-09-05 21:15 UTC v1.2                  |
-| **Version**      | 1.2                                        |
-| **Status**       | Draft — for CEO decision                   |
+| **Last Updated** | 2026-09-10 11:00 UTC v2.0                  |
+| **Version**      | 2.0                                        |
+| **Status**       | Decided — v2.0 is the committed plan       |
 | **Author**       | Business development / market research session |
 | **Related**      | PRD v2.6 (esp. §2, F18), TDD §13            |
 
@@ -14,22 +14,61 @@
 | 1.0 | 2026-09-05 | Initial market analysis. Industry scan of personal-finance, self-hosted-finance, family-office and SMB-cashflow categories. Verdict on family-office and SMB fit (both rejected as primary segments, with a narrow qualified wedge defined for each). Feature gap analysis ranked by revenue proximity vs. build cost. GTM recommendation built around a free self-hosted tier, with a structural correction to PRD F18.4 (hosting is the primary revenue line, not an add-on to AI) and a challenge to the closed-source decision. |
 | 1.1 | 2026-09-05 | **ICP/segmentation (§8) and a customer-anchored feature roadmap (§9) added** — the substance of this revision. Two corrections to v1.0 driven by new evidence. (a) **The beachhead is re-specified.** v1.0 named cross-border/multi-currency households as the beachhead on a "nobody serves this person" claim; that claim is wrong — a cohort of 2025–26 entrants (Borderless Budget, FlowFund, Tallyroot, Auritrack, Monavio) targets exactly this person, and Lunch Money owns the niche natively at a $60/yr pay-what-you-want minimum. Multi-currency is therefore re-classified as a **targeting filter and defensibility moat, not the value proposition** — it is the cheapest axis in the market. (b) **The value proposition is re-specified as planning, not budgeting**, on two findings: planning tools price 30% above full PFM suites (ProjectionLab $129/yr, $1,199 lifetime, $549/yr advisor; Boldin $144/yr — for a simulator with no ledger underneath), and the category's documented #1 churn cause is apps that "show data without producing behavior change" and fail to connect cashflow to a plan. Goaldy's shipped Plan simulator (PRD F8) is the only asset that addresses that, and no self-hosted competitor has one. Consequent changes: Goaldy Cloud repriced from $96/yr to $120–144/yr with a lifetime option added; the roadmap is re-ordered by **retention risk** rather than feature appeal (manual-entry apps churn at 3x the rate of auto-sync apps); Goaldy.AI moves from Phase 2 to the **last** horizon. |
 | 1.2 | 2026-09-05 | **§10 added: licensing, hosting-vs-self-hosting economics, and the value-exchange model** — who revenue comes from versus who insight, defect discovery and credibility come from, treated as two separate transactions with different currencies. Licensing resolved with a recommendation rather than options: **AGPL-3.0 for the core with a separately-licensed proprietary Pro package (open core), DCO rather than CLA.** Reasoning turns on the fact that AGPL's one real weakness — it does not stop a competitor hosting your software — describes a risk that effectively does not exist for a trust-and-support-bound niche PFM, while its benefits (main awesome-selfhosted listing rather than `non-free.md`, OSI credibility with the distribution segment, and community-contributed bank/institution import adapters) attack the one problem money and coding agents both handle badly: long-tail institution coverage, which requires real accounts at real institutions to test. FSL-1.1 documented as the fallback if hosting rights must be protected outright. **H5 re-slotted** in light of the AI/MCP work already being delivered by a coding agent: collapsing build cost is the argument *against* monetizing that layer, not for it — a feature an agent produces in a week is reproducible by every competitor's agent and cannot hold a price. Chat and MCP therefore ship **free with BYO API key** as a free-tier differentiator, launch headline and discovery channel (MCP registries as distribution), with only *managed inference* metered. Also documents the per-tenant-SQLite hosting cost advantage (85–95% gross margin, and an exit promise that is literally a file copy) and the trust obligations that hosting creates. |
+| **2.0** | **2026-09-10** | **Strategy reversed to self-hosted-first; §7, §9, §10 and §11 rewritten.** v1.0–v1.2 built toward a managed hosted service as the primary revenue line. That is now **deferred, not planned**, on three grounds: hosting makes you a controller of financial personal data with duties that `AS IS` cannot disclaim (Israel PPL Amendment 13 in force 14 Aug 2025, GDPR breach notification, DPIA, EU region choice); no one has yet paid for Goaldy at all, so building the infrastructure and legal wrapper for a subscription business inverts the risk; and adding services later is cheap while retreating from them is not. Four substantive reversals. (a) **Licensing: closed source, reversing v1.2's AGPL recommendation** — the AGPL case rested on needing contributors for long-tail bank adapters, but Obsidian demonstrates a plugin API delivers that ecosystem without source release, and `IMPORT_ADAPTERS` is already shaped as that boundary; trust comes from an open data format (the byte-identical backup/restore guarantee), not readable code, as Obsidian, Plex, Unraid and Blue Iris all demonstrate. (b) **Aggregation needs no server** — the app is already a server on the user's machine and can call SimpleFIN/GoCardless directly, so the single highest-impact anti-churn feature costs zero infrastructure, zero held credentials and zero support liability. (c) **REST API and MCP move to the free tier permanently** — gating them is unenforceable against a local SQLite file, they *are* portability, and MCP is both commoditized (Kubera, Era) and a discovery channel. (d) **"Goaldy Connect" retired as a concept** for bundling four services of very different risk profiles under one name; products are now named by what they cost you (Pro holds nothing, Sync holds ciphertext, Managed Accounts holds bank tokens). New in §7.5: a **telemetry and signal design** — update check on by default and disclosed, usage telemetry strictly opt-in with a published payload, bucketed counts and no financial values, plus the explicit warning that opt-in telemetry is selection-biased toward enthusiasts and its D30 figure is an upper bound rather than a measurement. §7.6 sets a dated 90-day decision point. §9 collapses five horizons into one, with the next chosen by observed demand. §10 reframes liability as the cost each deferred service would spend. §§1–6 and §8 (industry map, segment verdicts, ICP) are unchanged and still stand. |
 
 ---
 
 ## 0. Executive verdict (read this if you read nothing else)
 
-1. **Family offices: no. Not a segment, a fantasy.** Goaldy has no securities/positions model, no cost basis, no performance calculation, no legal-entity or ownership layer, no capital-call/commitment tracking, no document vault, and no partnership accounting. Those five things *are* the family-office product. The gap is a second product, not a backlog. See §3.
-2. **SMB: no, as "accounting". A narrow yes as "the owner's consolidated personal + business cashflow view."** Statutory accounting (AR/AP/VAT/payroll/double-entry/accountant export) is a moat you cannot cross, and QuickBooks/Xero own it. See §4.
-3. **Your stated AI/MCP differentiator (PRD F18.1) has already been commoditized.** Kubera ships MCP today at $249/yr, Era ships MCP over aggregated accounts. "Harmonized system of record for agents" is now parity, and Goaldy has *worse* ingestion than both — no aggregator at all. See §5.
-4. **The single highest-leverage missing feature is automated ingestion (SimpleFIN Bridge + GoCardless/PSD2), not AI.** Every competitor's #1 review complaint is manual CSV. This is a weeks-long build. See §6, Tier A.
-5. **The self-host-only funnel cannot pay for itself, and the arithmetic is not close.** At an industry-standard 1% free→paid conversion, $10k MRR at $10/mo needs ~100,000 active self-hosters — larger than Firefly III's entire installed base after a decade. **Hosted must become the default CTA and the primary revenue line; self-hosting is your trust asset and top of funnel, not your product.** This inverts PRD F18.4. See §7.
-6. **Closed source is a strategic error for the exact audience you're targeting.** You are asking r/selfhosted — the most paranoid software audience alive — to run an opaque binary over their complete bank history. Firefly III, Actual Budget and Ghostfolio are all open. See §7.4.
-7. **You are not selling a budgeting app. You are selling an answer to a question the household is anxious about.** Planning tools price *above* full PFM suites — ProjectionLab is $129/yr and $1,199 lifetime for a simulator with no ledger under it; Monarch is $99.99 for a complete aggregated PFM. Meanwhile the documented #1 reason people abandon budgeting apps is that they "show data without producing behavior change" and never connect cashflow to a plan. **Your Plan simulator is the answer to the category's biggest churn problem, and no self-hosted competitor has one.** Lead with it. See §8.
-8. **Multi-currency is your targeting filter and your moat — not your pitch.** Correcting v1.0: the cross-border niche is *not* empty. Borderless Budget, FlowFund, Tallyroot, Auritrack and Monavio all launched into it in 2025–26, and Lunch Money serves it natively at a $60/yr minimum — the cheapest price point in the market. Compete on multi-currency and you compete on the discount axis. Use it to *find and hold* customers; sell them the plan. See §8.
-9. **Order the roadmap by retention risk, not feature appeal.** Apps requiring manual entry churn users at **3x** the rate of auto-sync apps; category D30 retention averages 38%. That single number settles the sequencing debate. See §9.
-10. **The cheaper a feature is to build, the less it can be sold for.** Your coding agent delivering MCP and in-app chat in a week is the reason that layer cannot be the paid tier — every competitor's agent can do the same, and Kubera and Era already did. Ship it **free with BYO API key**; meter only managed inference. What stays defensible is what agents can't cheaply produce: long-tail institution coverage, accumulated user data and its switching cost, trust, and the unglamorous grind of running the hosting. See §10.
-11. **Licence: AGPL-3.0 core + proprietary Pro package, DCO not CLA.** AGPL's one real weakness is a risk that doesn't exist here; its benefits attack the problem money can't solve. See §10.2.
+**The plan, in one sentence: ship an excellent self-hosted product, closed source, free,
+instrumented — sell nothing but a $25 supporter tier — and let demand decide what gets
+built and hosted next.**
+
+1. **Family offices: no.** No securities model, no cost basis, no performance calculation,
+   no entity/ownership graph, no documents, no capital calls — those five things *are* the
+   product that segment buys, and the buyer additionally requires SOC 2, insurance and an
+   SLA a solo founder cannot supply. Kubera Black already sells entity nesting plus MCP at
+   $2,499/yr. §3.
+2. **SMB: no, as accounting.** AR/AP/VAT/payroll/statutory double-entry is a moat owned by
+   QuickBooks and Xero, and the forecasting layer above them (Float, Pulse) wins by
+   *reading* those ledgers. What's real is a persona, not a segment: the owner-operator who
+   is also the household CFO — served by the same entity layer as the HNW household. §4.
+3. **You sell the answer to a decision, not a budgeting app.** Planning tools price *above*
+   full PFM suites (ProjectionLab $129/yr and $1,199 lifetime for a simulator with no
+   ledger; Boldin $144/yr; Monarch $99.99 for a complete aggregated PFM). The documented #1
+   cause of abandonment is apps that "show data without producing behavior change" and never
+   connect cashflow to a plan. **Your Plan simulator answers the category's biggest churn
+   problem and no self-hosted competitor has one.** §8.
+4. **Multi-currency is the targeting filter and the moat — not the pitch.** The cross-border
+   niche is not empty (Borderless Budget, FlowFund, Tallyroot, Auritrack, Monavio all
+   launched into it) and Lunch Money owns it at a $60/yr minimum — the cheapest price point
+   in the market. Use it to find and hold customers; sell them the plan. §8.
+5. **Order by retention risk.** Manual-entry apps churn users at **3x** the rate of
+   auto-sync apps; category D30 retention averages 38%. That settles the sequencing. §9.
+6. **Aggregation requires no server of yours.** The app is already a server on the user's
+   machine and can call SimpleFIN or GoCardless directly. The single highest-impact
+   anti-churn feature costs zero infrastructure and holds zero credentials. §7.3.
+7. **Hosting is deferred, and that is a liability decision as much as a commercial one.**
+   Hosting makes you a controller of financial personal data — Israel's Amendment 13 (in
+   force 14 Aug 2025, real fines, a DPO threshold), GDPR breach notification, DPIA, EU
+   region choice — none of it disclaimable by an `AS IS` clause. Self-hosted software is a
+   licence. §10.
+8. **Closed source, open data format.** Reversing v1.2: a plugin API buys the ecosystem
+   without a source release (Obsidian's model, and `IMPORT_ADAPTERS` is already that
+   boundary). Trust comes from being able to leave with your data — your byte-identical
+   export guarantee is a stronger claim than most open projects can make. Put it on the
+   landing page. §7.4.
+9. **The cheaper a feature is to build, the less it can be sold for.** Your agent shipping
+   MCP and chat in a week is the reason that layer cannot be the paid tier. Free, BYO key,
+   and let MCP registries recruit for you. §7.2.
+10. **Never paywall portability, correctness, or security.** Gating the API also fails on
+    its own terms — the ledger is a local SQLite file, so the paywall stops nobody and
+    annoys the honest. §7.2.
+11. **Instrument before you launch, and set the threshold before you're invested.** Update
+    check on by default and disclosed; usage telemetry strictly opt-in with a published,
+    inspectable payload and no financial values. Know that opt-in telemetry is
+    selection-biased toward enthusiasts — the D30 figure it gives you is an upper bound.
+    Money (Catalyst) is the only unfakeable signal. §7.5, §7.6.
 
 ---
 
@@ -196,64 +235,184 @@ AR/AP/invoicing, VAT/tax filing, payroll, statutory double-entry accounting, tax
 
 ---
 
-## 7. Go-to-market
+## 7. Go-to-market — self-hosted first
 
-### 7.1 The arithmetic that should drive every decision
-Open-source / self-hosted free→paid conversion benchmarks: **0.3–1%** for mass-market developer tools, **1–3%** for enterprise-leaning, 3%+ exceptional.
+> **Rewritten in v2.0.** v1.0–v1.2 built toward a managed hosted service as the primary
+> revenue line. That is now **deferred, not planned**: it is unanswerable without users,
+> and it carries a data-custody liability that is unjustifiable before demand is proven.
 
-Run it at a *generous* 1%, targeting $10k MRR at $10/mo:
-- 1,000 paying users → **100,000 active self-hosters.**
-- That exceeds Firefly III's installed base after ~a decade of being the category default, free, open, and multilingual.
+### 7.1 The strategy on one page
 
-**Conclusion: a self-host-only funnel does not produce a business at any conversion rate you can realistically achieve.** Not "it's slow" — the numbers do not close.
+**Ship a genuinely excellent self-hosted product, closed source, free. Instrument it.
+Sell nothing at first except a supporter tier. Let demand decide what gets built next.**
 
-### 7.2 The correction: invert PRD F18.4
-Today the PRD treats a hosted instance as an "optional add-on" bundled with an AI subscription. That is backwards, and every comparable company demonstrates why: **Ghost, Plausible, Cal.com, n8n, GitLab, Discourse — all monetize managed hosting first, and everything else second.** Confluent reported 35% of $100k+ customers originated in the free tier; the free tier is a *funnel*, and the funnel has to terminate in something with a subscription attached.
+Every architectural and commercial question this document spent three revisions on —
+Postgres vs SQLite, multi-tenancy, hosting liability, sync pricing, entity modelling —
+depends on facts that do not exist yet. Users generate those facts. Nothing else does.
 
-Proposed structure:
+The three constraints that produced this:
 
-| Tier | What | Price | Role |
-|---|---|---|---|
-| **Free — Goaldy Self-Hosted** | Everything in F1–F17. Unlimited. Forever. BYO AI key. | $0 | Trust asset + top of funnel + distribution. Never crippled. |
-| **Goaldy Cloud** | Managed, backed up, updated, PWA, no Docker | **$12/mo, $120–144/yr** + **$449 lifetime** | **The primary revenue line.** Repriced upward in v1.1: you sell planning (ProjectionLab $129, Boldin $144), not budgeting (Monarch $99.99, Lunch Money $60). The lifetime option is copied from ProjectionLab deliberately — privacy-minded buyers self-select into it, and it solves a bootstrapper's cash-timing problem. |
-| **Goaldy.AI** | Chat + MCP + Monte Carlo + proactive nudges. Usage-capped; BYO-key option. | **+$8–12/mo** | Attach-rate expansion on Cloud; license-key unlock for self-hosters (F18.5 architecture stands). |
-| **Household Pro** (Phase 3) | Entities, roles, audit log, documents, advisor sharing, scheduled reports | **$25–40/mo** | §3.2 / §4.2 segments. 10x under Kubera Black. |
+1. **Liability.** Hosting makes you a data controller of financial personal data:
+   breach notification, DPIA, Israel's Amendment 13 (in force 14 Aug 2025, with real
+   administrative fines and a DPO threshold), EU region choice. None of it is
+   disclaimable. Self-hosted software is a licence with an `AS IS` clause. §10.
+2. **Proof.** Nobody has yet paid for Goaldy. Building a subscription business, its
+   infrastructure and its legal wrapper before the first sale inverts the risk.
+3. **Cost of reversal.** Launching self-hosted and adding services later is cheap.
+   Launching a service and retreating from it is not.
 
-Self-hosters can buy Goaldy.AI and Household Pro via the license key. That keeps the promise ("nothing about where your data lives is ever paywalled") intact while giving self-hosters something to pay for.
+### 7.2 The ladder — what exists, what's deferred
 
-### 7.3 Beachhead and sequencing
-**Beachhead: cross-border / multi-currency households with a decision pending.** Full ICP definition in §8 — the short version is that multi-currency is how you *find and hold* them, and the Plan simulator is what they *pay for*.
+**Free — the complete application, forever, uncrippled**
 
-Correcting v1.0, which claimed nobody serves this person: several 2025–26 entrants do (Borderless Budget, FlowFund, Tallyroot, Auritrack, Monavio), and Lunch Money serves it natively at 160+ currencies with historical rates for a $60/yr minimum. That cohort is simultaneously **evidence the pain is real** (five founders independently built for it) and **evidence it is commoditizing** (low barriers, thin products, race to the bottom on price). The defensible position is not "we do multi-currency too" — it is that none of them are self-hosted, none have a household planning simulator, none have real RTL/Hebrew, and none will ever hold an illiquid asset's valuation history.
+Accounts, transactions, tags, budgets, rules, dashboard, **the Plan simulator**,
+`asset_valuations` and net-worth history, manual + BYO-aggregator ingestion, full
+export/backup/restore, **REST API and local MCP**, **AI chat with BYO API key**, the
+import-adapter plugin API, Docker and (later) desktop app.
 
-**Sequence:**
-1. **Close launch blockers** — A5 Reports, A6 onboarding, A7 backup, A3 OFX/QIF, A8 PWA, plus the public feedback channel (F13.2). ~4–6 weeks.
-2. **Ship ingestion** — A1 SimpleFIN + A2 GoCardless + A4 recurring detection. This is what makes the product *demoable* rather than *explainable*. ~4–6 weeks.
-3. **Stand up Goaldy Cloud in beta** before the public launch, with a waitlist on the landing page. Launching to HN with no hosted option wastes 90%+ of the traffic — those visitors will not install Docker, and you will never see them again.
-4. **Ignition:** Show HN (Tuesday ~09:00 ET) → r/selfhosted (790k members; 98.3% run containers) → awesome-selfhosted PR → selfh.st newsletter → Product Hunt. README as a product page: one hero image, 5–7 functional GIFs. Avoid US holiday months. **Every CTA points at the hosted beta or the demo; the Docker command is the third link, not the first.**
-5. **Beachhead campaign in parallel** — Hebrew landing page, Israeli community seeding, multi-currency as the headline claim, not a footnote.
-6. **Then** Goaldy.AI (Q+1) and Household Pro (Q+2), sold into an existing base rather than cold.
+Three of those are gated by rule, not by tier:
 
-### 7.4 The closed-source problem — resolve this before launch
-You are asking the single most adversarial software audience in existence to run an **opaque binary over their complete financial history**, when the three incumbents in the category (Firefly III, Actual Budget, Ghostfolio) are all open source. This will be the top comment on your Show HN. It is not a hypothetical.
+- **Portability is never paywalled.** Export, backup, restore, and the API *are*
+  portability. Gating the API also fails on its own terms: the ledger is a local SQLite
+  file, so anyone technical enough to want the API can bypass it with `sqlite3`. An
+  unenforceable paywall stops nobody and annoys the honest.
+- **Correctness is never paywalled.** `asset_valuations` fixes a live defect.
+- **MCP is distribution, not product.** It is already commoditized (Kubera, Era), and MCP
+  registries are how the technical half of P0 finds tools. Give it away and let it recruit.
 
-You also inherit the cost without the benefit: closed source means no GitHub Issues tab (the PRD already notes you need to build a feedback channel to compensate), no contributors, no trust signal, no awesome-selfhosted credibility — while the "protection" it buys is negligible, because nobody is going to out-execute you by forking a personal finance app.
+**Catalyst — $25 one-time.** Early builds, a badge, a private channel. Zero COGS, pure
+margin, ships in a week. **The only pre-launch instrument that measures willingness to
+pay rather than curiosity.** Live on day one, not later.
 
-**Recommendation: AGPL-3.0 the core, license-key the paid layers (Goaldy.AI, Household Pro), own the hosted service.** AGPL is precisely the license that permits self-hosting while deterring a competing hosted service — the same structural bet Ghostfolio and n8n (Sustainable Use License) make. If you're unwilling to go full OSS, go **source-available (BSL/FSL, converting to Apache after 3–4 years)**, which gets you most of the audit-ability trust at none of the competitive risk. What you should *not* do is ship a closed binary and hope the audience doesn't notice.
+**Pro — $99–149 one-time, or $59/yr — built only when asked for.** Entities/ownership,
+multi-user roles (partner, accountant read-only, advisor read-only), audit log, document
+attachments, accountant export pack, scheduled reports. Local features, licence-gated.
+Imperfectly enforceable and that is fine — Plex, Unraid and Blue Iris prove people pay.
 
-### 7.5 Metrics and kill criteria
-Instrument these from day one (privacy-respecting, opt-in telemetry — an anonymous version-check ping, nothing about financial data):
+**Deferred, with the trigger that would un-defer each:**
 
-| Metric | 90-day target post-launch | Kill / pivot signal |
-|---|---|---|
-| Active self-hosted instances | 2,000 | <500 → positioning is wrong, not the marketing |
-| Hosted beta signups | 500 | <100 → the free tier isn't generating demand for convenience |
-| Hosted → paid conversion | ≥8% of trials | <3% → the hosted value prop is too thin |
-| Self-host → paid (any tier) | ≥0.5% | <0.2% at 12 months → self-host funnel is marketing spend, not a revenue channel; budget it as such |
-| D30 retention of connected accounts (post-A1) | ≥40% | <20% → ingestion isn't sticking; the ledger is going stale and everything downstream is dead |
-| Beachhead share of signups | ≥25% from IL/multi-currency | <10% → the beachhead thesis is wrong; re-pick before spending more |
+| Deferred | Build it when |
+|---|---|
+| Desktop app (Electron) | The landing page's "want a desktop app?" list crosses a few hundred |
+| E2EE Sync ($4–6/mo) | Users have two devices and complain |
+| Managed accounts (you hold bank tokens) | Demand is loud *and* revenue can fund the support load |
+| Goaldy Cloud (full hosting) | Only if the numbers demand it — and with a lawyer first |
+| Postgres migration, multi-tenancy | Only if hosting happens. Irrelevant otherwise. |
 
-**The one-year kill criterion for the paid business:** if 12 months post-launch you have not reached 100 paying subscribers across all tiers, the problem is not features or pricing — it is that self-hosted personal finance is a hobbyist category with structurally low willingness to pay, and the correct response is to go hosted-first and treat self-hosting purely as a marketing artifact.
+**"Goaldy Connect" is retired as a concept.** It bundled four services with very
+different risk profiles under one name — licence, aggregation, sync, MCP relay — which
+is precisely how a founder commits to the risky one by accident. Name products by what
+they cost you: *Pro* (you hold nothing), *Sync* (ciphertext), *Managed Accounts* (tokens).
+
+### 7.3 The aggregation insight that makes this work
+
+The desktop app — and the Docker instance — **is already a server on the user's machine.
+It can call SimpleFIN or GoCardless directly.** The user holds the aggregator
+relationship (SimpleFIN is $15/yr paid to SimpleFIN); the app fetches on a schedule,
+locally.
+
+That delivers most of "connected accounts" with **zero servers, zero tokens held, zero
+COGS, and zero broken-bank support tickets that are yours.** The only thing lost is the
+setup chore, which is an onboarding problem, not a reason to take custody of credentials.
+
+This is what makes the whole self-hosted-first plan viable rather than merely cheap:
+the single feature that most reduces churn does not require you to run anything.
+
+### 7.4 Licensing — resolved: closed source, open data format
+
+v1.2 recommended AGPL. **That is reversed.** The argument turned on needing community
+contributors for long-tail bank adapters — but Obsidian demonstrates that a **plugin API
+delivers an ecosystem without source release**, and Goaldy's `IMPORT_ADAPTERS` registry
+is already shaped as exactly that boundary (`parse()` is bytes → `ParsedImport`; adapters
+never touch the DB).
+
+Closed source is a proven model for precisely this audience: **Obsidian** (closed,
+local-first, free core, paid services), **Plex**, **Unraid**, **Blue Iris**. What they
+share is not open source — it is an **open data format**:
+
+> **Trust comes from being able to leave with your data, not from reading the code.**
+
+Goaldy's claim here is stronger than Obsidian's: a single SQLite file plus a
+backup/restore pipeline with a **byte-identical, CI-gated roundtrip guarantee**. That has
+been treated as an implementation detail; it is the central trust artifact and belongs on
+the landing page.
+
+**Accepted costs:** listing on awesome-selfhosted's `non-free.md` rather than the main
+list; no GitHub Issues tab (so a feedback channel is a launch blocker, per PRD F13.2);
+and the closed-source question on Show HN — for which the prepared answer is the export
+guarantee above, delivered without defensiveness.
+
+### 7.5 Signal — telemetry, and what it can and cannot tell you
+
+**Opt-in telemetry is legitimate here, but for a privacy-positioned finance product the
+design decides whether it produces signal or destroys the brand.** Two separate
+mechanisms, deliberately, because they answer different questions and warrant different
+defaults.
+
+**(a) Update check — on by default, disclosed, disableable.** A plain "is there a newer
+version?" request. This is expected behaviour for self-hosted software (Home Assistant,
+Nextcloud), it has genuine user value, and it yields the workhorse metric —
+**active-instance count, version distribution, and rough retention** — at near-100%
+participation. Disclose it in onboarding and the README; provide `GOALDY_DISABLE_UPDATE_CHECK`.
+
+**(b) Usage telemetry — opt-in, never opt-out.** For a product whose pitch is "your
+financial data never leaves your machine," **default-on analytics is an existential
+risk**: the day someone finds an undisclosed request in their firewall log, the brand is
+finished, and "but it was anonymous" does not survive that thread.
+
+Rules for the payload:
+
+- **Ask once, in onboarding, in plain language, showing the actual JSON.**
+- **Send:** a locally generated random instance UUID, app version, install date, coarse
+  feature-usage flags, and **bucketed** counts ("10–50 accounts", never "23").
+- **Never send:** amounts, currencies, balances, tag names, account names, descriptions,
+  institution names, locale-identifying detail, or anything per-transaction.
+- **Publish the exact payload** in the docs, and show the last payload sent in Settings.
+  Inspectable beats promised.
+- **Do not log IPs**, or truncate them. An instance UUID plus an IP is arguably personal
+  data; truncate, document retention, and keep the surface trivial.
+
+**The limitation to internalise before reading any of it:** opt-in telemetry is
+**selection-biased toward enthusiasts.** The users who churn at day 20 are
+disproportionately the ones who declined. **Your telemetry D30 number will be
+optimistic** — treat it as an upper bound, not a measurement.
+
+**Higher-signal instruments than telemetry, in ascending order of value:**
+
+| Signal | Worth |
+|---|---|
+| GitHub stars, HN upvotes, Reddit comments | Vanity. Ignore. |
+| Downloads, Docker pulls | Weak. Anyone installs anything. |
+| **Instances active at D30** (from the update check) | **Strong — the core metric** |
+| Detailed unsolicited bug reports | Strong. Nobody writes those about abandoned software. |
+| **Catalyst purchases** | **Strongest. Money is the only unfakeable signal.** |
+
+Add one cheap qualitative instrument: an **in-app prompt at day 14** asking what's
+missing. Self-hosted software has no uninstall survey — people simply stop — so this is
+the only chance to hear from someone before they go quiet.
+
+**The selection bias that will mislead you most:** launching Docker-only to r/selfhosted
+means you only ever hear from people who *can* run Docker. P0 — the anxious cross-border
+household — bounces silently, and the absence reads as no demand. **Put a "Desktop app —
+want this?" signup on the landing page** so non-Docker visitors self-identify. That
+converts the bias into a measurable signal and tells you whether the Electron project is
+worth 2–4 weeks.
+
+### 7.6 The decision point — set before launch, while still honest
+
+**90 days after launch:**
+
+| Metric | Target |
+|---|---|
+| Instances active at D30 | **500+** |
+| Catalyst supporters | **25+** |
+| Desktop-app waitlist | 200+ |
+| Detailed bug reports from real use | 20+ |
+
+**Miss both of the first two and the problem is positioning, not features.** Re-open this
+document rather than building more. Hit them and the next question — Pro, desktop, or
+sync — gets answered by what users actually ask for, not by this analysis.
+
 
 ---
 
@@ -333,161 +492,160 @@ Runs a NAS and 20 containers; has already tried Firefly III and bounced off its 
 
 ---
 
-## 9. The feature roadmap, ordered by retention risk
+## 9. The roadmap — one horizon, then listen
 
-The ordering principle, stated once: **apps requiring manual entry lose users at 3x the rate of auto-sync apps, and category D30 retention averages 38%.** Features are therefore sequenced by how much churn they remove, not by how interesting they are to build.
+> **Rewritten in v2.0.** The five-horizon plan in v1.1 sequenced toward a hosted
+> monetization event in H3. With hosting deferred, there is exactly one horizon worth
+> planning, and the rest is decided by what users ask for.
 
-### H1 — "Tell no lies" (next ~6 weeks)
-*Theme: everything the product currently claims should be true. This is a credibility gate on the public launch, not a growth phase.*
+The ordering principle is unchanged and still evidence-backed: **apps requiring manual
+entry lose users at 3x the rate of auto-sync apps, and category D30 retention averages
+38%.** Sequence by churn removed, not by interest.
 
-| Item | Why it's here |
-|---|---|
-| **`asset_valuations` time series** | Fixes a live correctness defect: `reported_value` is a scalar overwritten in place, so illiquid assets chart as a flat line and editing a property value retroactively rewrites net-worth history. P0's core asset class is exactly the one currently modelled wrong. Add purchase price/date for appreciation % nearly free. |
-| **Reports page** (retire the "Coming soon" stub) | A visible stub is read as abandonware by S1 on launch day |
-| **Onboarding + localized starter tag tree** | Empty state is where the category loses people before D1 |
-| **Encrypted scheduled backup** | "Own your data" is a liability until it's "safely" |
-| **PWA installability** | Two files; removes the "no mobile app" objection |
-| **Public feedback channel** | A closed distribution with no way to report a bug reads as dead |
+### H1 — "Super useful, tells no lies" — the only planned horizon
 
-**Exit criterion:** a stranger can install, import, and reach one true insight without hitting a stub or a wrong number.
+Everything below is the definition of "super useful" derived from the two documented
+causes of abandonment: manual entry, and apps that show data without connecting cashflow
+to a decision.
 
-### H2 — "Stop the bleeding" (~Q1 2027)
-*Theme: remove the 3x churn multiplier. This is the single highest-ROI horizon in the plan.*
+| # | Item | Why it's in H1 |
+|---|---|---|
+| 1 | **`asset_valuations` time series** | Not a gap — a **live defect**. `reported_value` is a scalar overwritten in place, so illiquid assets chart flat and editing a property value retroactively rewrites net-worth history. It is currently wrong on the public demo, for P0's core asset class. Add purchase price/date for appreciation % nearly free. ~1 week. |
+| 2 | **In-app BYO-aggregator ingestion** (SimpleFIN token pasted into the app; GoCardless for EU/UK) | Directly attacks the 3x churn multiplier, and per §7.3 requires **no server of yours**. |
+| 3 | **OFX/QIF import** | Cheap; also the migration path off Quicken and Mint exports. |
+| 4 | **Recurring / upcoming-cashflow detection** | The most-cited "wow" feature in Monarch and Copilot reviews. Pure logic over existing data, reusing the rules engine. |
+| 5 | **The Plan promoted to a first-class surface** | The only asset no competitor in this category has, and the answer to the #1 documented churn cause. It is currently a nav item. It should be the dashboard, the onboarding, and the pitch. |
+| 6 | **Reports** (retire the "Coming soon" stub) | A visible stub reads as abandonware to S1 on launch day. |
+| 7 | **Onboarding + localized starter tag tree** | Empty state is where installs die before D1. |
+| 8 | **Encrypted scheduled backup** | "Own your data" is a liability until it's "safely." |
+| 9 | **Update check + opt-in telemetry** (§7.5) | Without this the launch produces anecdotes instead of data. |
+| 10 | **Public feedback channel** | Closed source means no Issues tab; the bug reports are the entire point of the free tier. |
+| 11 | **Catalyst supporter tier** | One Stripe link. The only instrument that measures willingness to pay. |
+| 12 | **PWA installability** | Two files; removes the "no mobile" objection at near-zero cost. |
 
-- **SimpleFIN Bridge** ingestion (user holds the $15/yr relationship — preserves the no-credential-proxying non-goal)
-- **GoCardless Bank Account Data (PSD2)** for EU/UK; Moneyman continues for IL
-- **OFX/QIF import** — also the migration path off Quicken/Mint exports
-- **Recurring / subscription detection + upcoming-cashflow calendar** — the most-cited "wow" feature in Monarch and Copilot reviews, and pure logic over data you already hold
-- **Automated transfer peer-matching** — cross-currency transfers currently read as phantom income/expense, which is P0's most visible daily annoyance
+**Exit criterion:** a stranger can install, connect or import, and reach one true insight
+about a real decision — without hitting a stub, a wrong number, or a manual chore.
 
-**Exit criterion:** D30 retention of connected accounts ≥40%. If this horizon doesn't move that number, nothing downstream matters.
+### Then: listen
 
-### H3 — "Answer the question" (~Q2 2027) — *the monetization horizon*
-*Theme: ship what P0 actually pays for, and open Cloud.*
+The next horizon is chosen by the §7.6 signals, not by this document. The candidates,
+each already specified above, in the order they are most likely to be demanded:
 
-- **Plan promoted to a first-class surface**, not a nav item — the answer to the anxious question belongs on the dashboard, in the onboarding, and in the marketing
-- **Monte Carlo / range-based projection** — a probability band, not one deterministic line. This is the direct ProjectionLab comparable and justifies the $129–144 price point
-- **Insight-to-action**: the Plan engine already computes required monthly savings and the first danger year — surface it as a move, not arithmetic
-- **Holdings-lite**: symbol/qty/cost basis + daily price → allocation, unrealized P&L, and an auto-written valuation row. Explicitly punt tax lots, corporate actions, TWR/IRR; label it a tracker, not a book of record
-- **Scheduled email/PDF report** — recurring re-engagement, and the hook for advisor sharing later
-- **Goaldy Cloud GA** at $12/mo · $120–144/yr · $449 lifetime
-
-**Exit criterion:** 100 paying subscribers. This is the go/no-go for the whole commercial thesis (§7.5).
-
-### H4 — "Expand the household" (~Q3 2027)
-*Theme: raise ARPU on an existing base; open S2/S3 without a new GTM motion.*
-
-- **`entities` / ownership layer** — the single highest-value unbuilt feature after ingestion; opens S2 and S3 with one table
-- **Multi-user roles** (partner / accountant read-only / advisor read-only) — `users` table already exists; Monarch's collaboration is its top retention driver
-- **Document attachments** + full-text search (SQLite FTS5)
-- **Audit log** — non-negotiable for anyone with an accountant
-- **Accountant export pack** by entity by period — turns the accountant from a blocker into a channel
-- → ships as **Household Pro, $25–40/mo**
-
-### H5 — "Agents" — re-slotted in v1.2
-*Theme: already being delivered by a coding agent. The question is no longer when to build it, but which side of the paywall it lands on. Answer: the free side.*
-
-- **MCP server** over the existing OpenAPI surface; read-only by default, write scopes opt-in — **free, all tiers**
-- **Chat / ask-your-ledger** and **LLM-assisted categorization** — **free with BYO API key**, self-hosted and Cloud alike
-- **Managed inference** (no key required, capped) — the only metered part, sold as convenience, not capability
-- **Proactive goal-drift push** — free
-
-**Why free, when the PRD has this as the first paid layer.** Build cost has collapsed, and that cuts against you, not for you: a capability your agent produces in a week is one every competitor's agent produces in a week. Kubera and Era already shipped MCP. A commodity cannot hold a price. Meanwhile the same feature *given away* buys three things a paid tier would not:
-1. **A launch headline** — "the only self-hosted personal finance app with a built-in agent and an MCP server" is a true, checkable, category-first claim to S1 on launch day.
-2. **A discovery channel** — MCP registries and directories are where P0's more technical half now looks for tools. That is distribution, and it is free.
-3. **A defensible line to stand on** — *you pay for compute we run, never for a capability we gate.* That single rule survives contact with an audience that will scrutinise every paywall.
-
-Keep the F18.5 licensing-service architecture; it now gates **Household Pro** and managed inference rather than the AI surface itself.
+**Desktop app** (if the waitlist fills) → **Pro features** (if people ask for entities,
+roles or an accountant view) → **E2EE Sync** (if two-device complaints appear) →
+**Managed accounts** (only if loud and fundable).
 
 ### Permanently out of scope
-AR/AP/invoicing, VAT/tax filing, payroll, statutory double-entry, tax optimization, bank-credential proxying, trade execution, partnership/GL accounting, capital calls, a native mobile app, and anything requested primarily by S1 that P0 would not use.
+
+AR/AP/invoicing, VAT/tax filing, payroll, statutory double-entry, tax optimization,
+bank-credential proxying, trade execution, partnership/GL accounting, capital calls, a
+native mobile app, multi-tenancy, and anything requested primarily by S1 that P0 would
+never use.
+
 
 ---
 
-## 10. Licensing, hosting, and the value exchange
+## 10. Liability — what self-hosting buys, and what each service would cost
 
-### 10.1 The principle that decides everything below
+*Not legal advice. An Israeli privacy/tech lawyer and an accountant are both required
+before the first sale. This section maps the terrain so those conversations are short.*
 
-**You cannot charge for what is cheap to build. You can charge for what is expensive to run, and for what is expensive to leave.**
+### 10.1 The delta
 
-An agent now writes a chat interface, an MCP server, a categorization model call, a chart, a report in days. So can every competitor's agent. Anything in that class is a *feature*, and features have gone to zero. What has not gone to zero:
-
-| Durable | Why an agent can't collapse it |
-|---|---|
-| **Long-tail institution coverage** | Requires real accounts at real banks to test. No amount of code generation produces a CSV export from an obscure Israeli credit-card issuer that you don't hold a card with. |
-| **Accumulated user data** | Three years of valuation history, a tuned tag tree, a household Plan. Switching cost measured in years, and it belongs to the user — which is exactly why it's honest to rely on. |
-| **Operational burden** | Uptime, backups, restores, migrations, support at 11pm. Nobody wants this, which is why they pay for it. |
-| **Trust** | Takes years, dies in one incident, cannot be generated. |
-| **Distribution** | The list, the forum, the newsletter, the community that vouches for you. |
-
-**Monetize the boring, undifferentiated heavy lifting and the data gravity. Give away the clever parts.** This is the opposite of the instinct that built PRD F18, and it is the single most important correction in this document.
-
-### 10.2 Licensing — the recommendation
-
-**AGPL-3.0 for the core. A separately-licensed proprietary package for Pro (entities, roles, audit log, advisor share). DCO on contributions, not a CLA.**
-
-**The options, honestly weighed:**
-
-| Option | Buys you | Costs you |
+| | Self-hosted (the plan) | If you hosted |
 |---|---|---|
-| **Closed (today)** | Nothing you actually need | Top comment on your Show HN; no contributors; no awesome-selfhosted; forces you to build a feedback channel to replace the Issues tab you gave up |
-| **FSL-1.1 / BSL** (source-available, converts to Apache in 2 yrs) | Absolute protection of hosting rights | Lands you on awesome-selfhosted's `non-free.md` rather than the main list; forfeits the OSI-credibility signal with S1; measurably dampens contribution |
-| **AGPL-3.0 + proprietary Pro** ← **recommended** | Main list, OSI credibility, contributions, Ghostfolio precedent in this exact category, and a hosted fork is still obliged to publish its changes | Does not, in theory, stop someone hosting Goaldy commercially |
+| Your legal role | Software vendor. You never touch their data. | **Controller and processor of financial personal data** |
+| Breach duty | None — nothing to breach | GDPR 72h + Israeli PPA + data subjects |
+| Data loss | Their problem, disclaimable | Yours, and your brand |
+| Availability | No obligation | Contractual |
+| Disclaimable by `AS IS`? | Largely yes | **No — statutory duties cannot be contracted away** |
 
-**Why that theoretical cost is acceptable:** the AGPL free-riding scenario is a hyperscaler or a rival SaaS operating your code at scale. That is a real threat to a database or an observability platform. It is not a threat to a niche personal-finance app whose moat is trust, support and long-tail bank coverage — the code is the *cheapest* part of what you'd be handing over. AWS is not launching Managed Goaldy. A competitor who forks you still has to earn the trust of people handing over their bank history, and AGPL forces them to publish every improvement back.
+That last row is why the sequencing in §7 is a liability decision as much as a
+commercial one. An `AS IS` clause covers software defects; it does nothing about
+data-protection obligations.
 
-**Why AGPL beats FSL *specifically for Goaldy*:** your hardest problem is H2 — long-tail import adapters for institutions you don't bank with. That problem is unsolvable by money at your scale and unsolvable by coding agents at any scale. It is solvable by **contributors who hold accounts at those institutions**, and contributors need a real open-source licence and a public repo. Open-sourcing converts your most agent-resistant problem into community labour. Nothing else on the table does that.
+### 10.2 The regulatory facts that apply
 
-**DCO, not CLA.** A CLA lets you relicense or sell later; it also visibly suppresses drive-by contributions, which is the entire benefit you're buying. Take the DCO. Revisit only if an exit becomes a live plan — and understand that retro-fitting a CLA later means re-contacting every contributor.
+- **Israel PPL Amendment 13, in force 14 August 2025** — administrative fines, power to
+  suspend database operations, a real breach-notification regime; the PPA issued its first
+  fine that same month. Mandatory DPO for large databases or sensitive-data processors;
+  the grace period ended 31 October 2025. **Where Goaldy would fall on that threshold is a
+  specific question for the lawyer** — and it only arises if you host.
+- **EU adequacy for Israel** was reaffirmed January 2024 and is reviewed four-yearly, but
+  is under sustained civil-society and parliamentary pressure to be reassessed. **If you
+  ever host EU customers, pick an EU region** rather than depending on adequacy holding.
+- **Aggregation is not a licence problem if you never touch credentials.** GoCardless is
+  an authorised AISP across the EEA and UK; SimpleFIN's relationship is with the user.
+  Consuming a licensed provider keeps you a software vendor.
 
-**The paywall rule, stated once so it can be enforced:**
-> Never paywall data ownership, portability, correctness, or security. Paywall convenience, collaboration, scale, and compute we pay for.
+**Write this into the PRD as a non-goal:**
 
-By that rule: export, backup, encryption, every bug fix, the AI surface, and the MCP server are free forever. Hosting, managed inference, multi-user roles, entities, audit log and advisor sharing are paid. That line is defensible in public; "AI costs extra because AI is valuable" is not.
+> **Goaldy never handles, stores, or proxies bank credentials.** Aggregation is always via
+> a licensed third party the user consents to directly.
 
-### 10.3 Hosting vs self-hosting — the economics you actually have
+### 10.3 Risks ranked, and their mitigations
 
-**Your architecture is an unusually good hosting business and you may not have noticed.** One SQLite file per tenant means: no multi-tenancy rewrite, trivial per-customer isolation, hundreds of tenants per small VPS, backup and restore that are a file copy, and — the part that matters commercially — **an exit promise nobody else in this market can make honestly: "here is your entire database, take it and go."**
+1. **Personal liability from not incorporating** — near-certain exposure, catastrophic,
+   cheapest fix on the list. **No revenue into a personal account. Incorporate first.**
+2. **Advice liability** — grows with exactly the strategy §9 recommends (promoting the
+   Plan, insight-to-action). Mitigation is framing: **arithmetic, not instruction**
+   ("this goal is short by $400/mo"), never "you should," never a named security or
+   product, every projection labelled illustrative. Keeps ~95% of the commercial value.
+3. **VAT/tax on digital services** — boring, near-certain to be wrong if ignored.
+   EU B2C digital services means OSS registration; plus Israeli VAT.
+4. **Consumer/auto-renewal law** — low severity, easy; matters once Pro is annual.
+5. **Data breach / loss** — **structurally near-zero while you host nothing.** This is
+   the single largest benefit of the plan and the thing each deferred service spends.
 
-| | Self-hosted | Goaldy Cloud |
-|---|---|---|
-| Revenue / user | ~$0 (0.3–0.5% buy a Pro key) | $120–144/yr, or $449 lifetime |
-| COGS / user | $0 | ~$0.50–2/mo at density |
-| Gross margin | n/a | **85–95%** |
-| CAC | ~$0 (forum, list, search) | Low — converted from free tier and content |
-| Support cost | Moderate, and **it is the product you're buying from them** | High per user, and rising with tenure |
-| What you actually get | Defect discovery, adapters, credibility, translations | Money, retention data, WTP signal, referrals |
-
-**The obligation hosting creates, which you must engineer rather than assert.** The moment you host, you become the custodian your own positioning warns people about. Non-negotiables before Cloud GA: per-tenant encryption at rest, a published architecture and security page stating exactly what you can and cannot see, region choice (EU / IL at minimum for P0), a documented incident plan, and one-click full export. And honest copy — not "your data is safe," but: *"Self-host and we can never see it. Or let us host it, and here is precisely what we can see, and here is the button that hands you the file and ends the relationship."* That sentence sells better than any privacy claim, because it's falsifiable.
+**Before the first sale:** incorporate; ToS with liability capped at fees paid, warranty
+disclaimer, explicit "not financial advice," and "verify figures against your bank";
+privacy policy covering telemetry and the update check specifically; consider cyber /
+tech E&O insurance (cheap relative to exposure, and the underwriting questionnaire forces
+hygiene).
 
 ### 10.4 The value exchange — who pays in money, who pays in everything else
 
-This is two separate transactions and they must be run simultaneously. The free tier tests your *software*. The paid tier tests your *business*. Neither substitutes for the other.
+Two transactions, run simultaneously. **The free tier tests your software. The supporter
+tier tests your business.** Neither substitutes for the other.
 
-| Constituency | What they give you | What they cost you | What you owe them | Never do |
-|---|---|---|---|---|
-| **S1 self-hosters** | Defect discovery in configurations you'll never own; import adapters for institutions you don't bank with; translations; GitHub stars; awesome-selfhosted and newsletter listings; **credibility with P0, who reads those forums before trusting you** | Support hours; feature-request gravity pulling toward the wrong product; occasional entitlement | A genuinely complete free product, fast issue triage, a public roadmap, credit for contributions | Cripple the free tier. Let them set the roadmap — they'll ask for double-entry, plain-text export and a CLI; P0 wants none of it |
-| **P0 Cloud payers** | Money; retention data; willingness-to-pay signal; referrals inside tight expat/IL communities | Support; an uptime obligation; data-custody risk | Reliability, portability, privacy, and a working plan | Paywall their data or their exit |
-| **S2 / S3 Pro** | ARPU expansion; concrete requirements for entities and audit | Long, consultative support cycles | Roles, audit, export, and patience | Build them AR/AP/VAT/payroll |
-| **Advisors (H4+)** | Distribution leverage — one advisor brings N households | White-label and integration pressure | Read-only client views, scheduled PDF reports | Become an advisor CRM |
+| Constituency | Gives you | Costs you | Never |
+|---|---|---|---|
+| **S1 self-hosters** | Defect discovery in configurations you'll never own; import adapters for institutions you don't bank with; translations; listings; **credibility with P0, who reads those forums before trusting you** | Support hours; feature-request gravity toward the wrong product | Cripple the free tier. Let them set the roadmap — they'll ask for double-entry, plain-text export and a CLI; P0 wants none of it |
+| **P0 households** | The purchases and the retention that prove the thesis | Support; expectations | Paywall their data or their exit |
+| **Catalyst supporters** | The only honest willingness-to-pay signal you have | Almost nothing | Over-promise what the badge buys |
 
-**The asymmetry that justifies the whole free tier: P0 does not file bug reports. P0 churns silently.** S1 files a detailed issue with logs at 2am for free. That makes your self-hosted base a QA department and an early-warning system you are not paying for — and it is why a *crippled* free tier is self-defeating. Gate a feature and you stop receiving defect reports about it; you'll learn it was broken when a paying customer leaves without telling you why.
+**The asymmetry that justifies the free tier: P0 does not file bug reports — P0 churns
+silently. S1 files a detailed issue with logs at 2am, for free.** Your self-hosted base
+is an unpaid QA department. Gate a feature and you stop receiving defect reports about
+it, then learn it was broken when someone leaves without telling you.
 
-**The counter-rule, so this doesn't become an excuse:** S1's feedback is high-signal about *correctness* and near-worthless about *priority*. Weight their bug reports at 100%. Weight their feature requests at close to zero unless P0 wants the same thing.
+**The counter-rule:** S1's feedback is high-signal on *correctness* and near-worthless on
+*priority*. Weight their bug reports at 100%, their feature requests at close to zero
+unless P0 wants the same thing.
 
-**What you must never sell, at any tier:** user data, advertising, advisor lead-generation on your users, or anonymised aggregate financial data. Each converts a trust-based business into a data business, and this audience will detect it and leave. There is no version of that trade that pays.
+**Never sell, at any tier:** user data, advertising, advisor lead-generation on your
+users, or anonymised aggregate financial data. Each converts a trust business into a data
+business. This audience detects it, and there is no version of that trade that pays.
 
 ---
 
 ## 11. What to do Monday
 
-1. **Adopt the positioning sentence in §8.1** and rewrite the landing-page pitch (PRD F14) against it. You sell the answer to a decision, not a budgeting app.
-2. **Decide the licence: AGPL-3.0 core + proprietary Pro, DCO.** (§10.2) This unblocks the public repo, the feedback channel, and the launch — everything else queues behind it.
-3. **Re-slot the in-flight AI/MCP work to the free tier** with BYO API key. (§10.1, H5) It becomes the launch headline instead of a paywall argument you'd lose.
-4. **Commit to P0 (§8.3) and to the anti-ICP (§8.6) in writing.** Half this document's value is the features you now get to refuse.
-5. **Start H1 with `asset_valuations`** — one week, fixes a correctness defect live on the public demo, prerequisite for holdings and entities both.
-6. **Write the paywall rule (§10.2) into the PRD as a governing principle**, before any tier work starts. It is much cheaper to hold a line than to retreat from one publicly.
-7. **Stand up the Cloud waitlist** at $120–144/yr with a $449 lifetime option, and **instrument D30 retention of connected accounts** — the number that decides whether H3 is worth building.
+1. **Incorporate.** Nothing else on this list should precede it, and Catalyst can't ship
+   without it.
+2. **Start H1 with `asset_valuations`** — one week, fixes a defect live on the public
+   demo, and it's the prerequisite for holdings and entities if those ever come.
+3. **Ship the Catalyst $25 tier and the feedback channel.** One Stripe link and one
+   public repo with issues only. These are your two instruments; without them the launch
+   produces anecdotes.
+4. **Build the update check and opt-in telemetry to the §7.5 spec** — disclosed payload,
+   inspectable in Settings, bucketed counts, no financial values, ever.
+5. **Add the "Desktop app — want this?" signup to the landing page** before launch, so the
+   people who can't run Docker self-identify instead of bouncing invisibly.
+6. **Rewrite the landing-page pitch (PRD F14) around §8.1** — you sell the answer to a
+   decision, and the trust artifact is the byte-identical export guarantee. Put both on
+   the page.
+7. **Write the §7.6 targets down and date them.** A gauge with no threshold runs forever.
 
 ---
 
