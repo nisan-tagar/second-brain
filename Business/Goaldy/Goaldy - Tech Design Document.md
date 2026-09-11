@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-08-29 v2.4  |
-| **Version**      | 2.4              |
+| **Last Updated** | 2026-09-11 v2.5  |
+| **Version**      | 2.5              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -24,6 +24,7 @@
 |2.2|2026-08-26|§4a: documents `updateGeneration`/`deleteGeneration` — direct edit/delete of any generation (open or closed) by id, superseding the original "closed history is immutable" design. `updateGeneration` touches only amount/currency/type/period/custom_days/rollover, never `start_date`/`end_date`, so the partial-unique-index and CHECK-constraint invariants remain untouched by this change. `deleteGeneration` reopens the tag's previous closed generation when the deleted one was open (if one exists), and leaves a plain coverage gap when the deleted one was already closed — both in one transaction. New `PATCH`/`DELETE /api/tags/:id/budget/:generationId` routes.|
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
+|**2.5**|**2026-09-11**|**New §14 documents the Metrics engine** (designed, not built) — the technical counterpart to the PRD's F19, and the prerequisite for closing the F10 Reports launch blocker. Key decisions: the unit of analysis is a **dense, sign-normalised time bucket, never a raw transaction**, which settles what `min`/`avg`/`stdDev` even mean on an aggregate; all metric math is **pure and database-free** under `apps/web/lib/domain/metrics/`, so the entire catalog is unit-testable under the node-only vitest; series construction is **one `GROUP BY member, bucket` pass**, never one query per member, reusing `cashflowExcludeSQL`, `getDescendantTagIds` and the same `COALESCE(tt.weight, 1)` split attribution as `getTagSummary`/`getBarChart` so the three cannot disagree; **no metric ever serialises as `NaN`/`Infinity`** (JSON turns both into a bare `null` silently) — every undefined metric is `null` plus a machine-readable reason plus a sample-size sufficiency level, pinned by a dedicated guard test; and **no new tables, no cache, no materialisation** (a stale figure in a financial app is worse than a slow one), so `goaldy.sql` and the ERD are untouched. The engine is explicitly a **consolidation**: `computeTagAverages` is deleted onto it behind an exact-equivalence gate (via a new `anchor` option reproducing its first-activity divisor), and `computeTrailingAverage` is later re-expressed as a budget-period bucketing strategy over `lib/domain/budget-period.ts`'s existing occurrence windows. §12: the "no public third-party API" non-goal is unchanged — `/api/metrics` is an authenticated route on the existing surface, not a new public API.|
 
 ---
 
@@ -515,6 +516,171 @@ architecture.
 
 ---
 
+## 14. Metrics Engine (Designed, Not Built)
+
+The technical counterpart to PRD §F19. Full design, including the metric catalog and
+every definedness rule: `docs/superpowers/specs/2026-09-11-metrics-engine-design.md`.
+Phased plan: `docs/superpowers/plans/2026-09-11-metrics-engine.md`.
+
+### 14.1 The Problem It Solves
+
+Six code paths already compute "money over a window":
+
+| Path | Buckets? | Notes |
+|---|---|---|
+| `getTransactionSummary` | no | income/expense/savings/net-worth/inflow/outflow |
+| `getTagSummary` | no | one tag + descendants, split-weighted, plus `earliest` |
+| `getBarChart` | yes | **sparse** — a bucket with no rows is absent, not zero |
+| `getBalanceHistory` | yes | a stock series, not a flow |
+| `computeTrailingAverage` | yes | budget-period buckets, own sign resolution |
+| `computeTagAverages` | no | divides by calendar months from first activity |
+
+The last two are already metrics, built ad hoc, with **different divisor rules**. The
+third is a series nothing may average — `mean` over its output omits the zero buckets
+entirely — and nothing in the code says so. A seventh ad-hoc implementation would make
+this strictly worse, so the engine is scoped as a **consolidation that deletes two of
+these**, not as an addition. §14.7 is the load-bearing part of this section.
+
+### 14.2 Layering
+
+```
+packages/schema/metrics.ts              Zod + types; no SQL, no new tables
+apps/web/lib/domain/metrics/            PURE, database-free, node-testable
+  stats.ts  trend.ts  anomaly.ts
+  bucket-calendar.ts  sufficiency.ts  compute.ts
+apps/web/lib/server/queries/metrics.ts  buildSeries() — the ONE bucketing query
+apps/web/app/api/metrics/route.ts       withAuth + Zod validation + cost guards
+apps/web/lib/queries/metrics.ts         thin fetch wrapper
+apps/web/lib/hooks/useMetrics.ts        react-query hook + query key
+apps/web/lib/server/ai/tools.ts         one `get_metrics` tool (chat + MCP, one registry)
+apps/web/components/ui/metric-tile.tsx  the shared display primitive
+```
+
+Everything under `lib/domain/metrics/` is **pure and `.ts`** — vitest runs
+`environment: 'node'` with no jsdom, so the entire metric catalog is exercised with zero
+database and zero HTTP. The server layer does no metric math; the domain layer does no
+I/O. A bug is therefore provably in one side or the other.
+
+### 14.3 Series Construction
+
+`buildSeries()` runs **one `GROUP BY member, bucket` pass**, never one query per member —
+a per-member loop against a tag tree is an N+1. It reuses, rather than reimplements:
+
+- `cashflowExcludeSQL` — transfer/investment exclusion, every dimension;
+- `getDescendantTagIds` + `JOIN transaction_tags` with `COALESCE(tt.weight, 1)` — the
+  **identical** split attribution `getTagSummary` and `getBarChart` use, so a tag's
+  metric total and its summary total cannot drift;
+- `getBaseCurrencyAndRates` / `convertToBase` — for the converting dimensions;
+- `foldToDepth` (`lib/domain/tag-flow.ts`) — for depth-folded tag members.
+
+Raw bucket rows are then handed to `bucket-calendar.ts`, which **densifies** them against
+a skeleton derived from `(grain, dateFrom, dateTo, anchor)` — an absent bucket becomes a
+zero, and leading/trailing buckets not fully covered by the horizon are flagged
+`partial: true`. This densification is the structural difference from `getBarChart` and
+is the reason the two coexist rather than one replacing the other: a sparse series is
+correct for a chart and wrong for a mean.
+
+Bucket keys follow the existing `strftime` conventions (`'%Y-%m'`, `'%Y-W%W'`, `'%Y'`,
+plus a new quarter expression) **including the app's non-ISO week numbering** — a metrics
+endpoint that disagreed with the bar chart about which week a transaction falls in would
+be worse than one that is consistently non-ISO. Every bucket also carries real ISO
+`start`/`end` dates, because `key` is a display label and, for weeks, is **not parseable
+by `Date.parse`** — a trap already documented at length in `lib/domain/tag-averages.ts`.
+Nothing may parse `key`.
+
+### 14.4 Currency and FX
+
+Matches the conventions already in force, deliberately:
+
+- `tag`, `type` and `total` dimensions convert to base currency;
+- the `account` dimension does **not** convert and reports each account's own currency,
+  exactly as `getTransactionSummary`'s inflow/outflow and `getBarChart`'s account branch
+  already do — otherwise the account view's metrics would contradict the balance chart
+  beside them.
+
+Conversion uses `getExchangeRates`' **current** rates for every bucket, historical ones
+included, as every money query in this app does. A foreign-currency series' trend
+therefore describes behaviour change, not currency movement — the correct default, but
+the response states `fxBasis: 'current-rates'` because the opposite assumption is the
+natural one. Historical-rate series would need a rate-history table the app does not have
+and are out of scope.
+
+### 14.5 No New Tables, No Cache
+
+`goaldy.sql` is **untouched** and `pnpm erd:generate` is not required. Every figure is
+computed live from `transactions` + `transaction_tags` on request. There is no metrics
+table, no nightly job, and therefore no invalidation problem — a stale number in a
+financial app is worse than a slow one. If a query is slow, the remedy is a coarser grain
+or an index, never a cache.
+
+Cost is bounded at the route instead: at most 50 series, at most 400 buckets per series
+(the ALL-horizon day-grain case `lib/domain/chart-resolution.ts` already measured at 603
+points), and at most 5,000 bucket objects total when raw buckets are requested. Each
+guard returns 400 with a message naming the remedy ("coarsen `grain` to `month`"), and
+`includeBuckets` defaults to `false` so the common agent call returns a compact metric
+pack.
+
+### 14.6 The Non-Finite Guarantee
+
+**No metric ever serialises from `NaN` or `Infinity`.**
+
+This is a correctness requirement, not a style preference. JSON has neither value:
+`JSON.stringify({ cagr: NaN })` and `JSON.stringify({ cagr: Infinity })` both yield
+`{"cagr":null}` — **silently**, with nothing distinguishing "undefined because the base
+bucket was zero" from "undefined because there isn't enough data" from "genuinely zero."
+A consumer, and far more readily a model, fills that vacuum.
+
+So each metric is either a finite number or `null` with an entry in `nullReasons`
+(`insufficient-buckets` | `zero-base` | `sign-change` | `non-positive-mean` |
+`no-variance` | `no-data` | `unsupported-for-unit`), alongside a `sufficiency` envelope
+carrying bucket count, active-bucket count, which partial buckets were excluded, and a
+`none | weak | adequate` level. A dedicated guard test asserts across every fixture that
+no value originated non-finite and that every `null` has a matching reason — in the same
+spirit as `modal-guard`/`button-guard`/`data-state-guard`.
+
+Two derived rules bind consumers, both in the UI and in the `get_metrics` tool
+description: nothing from the distribution or trend families may be rendered or asserted
+at `level === 'none'`, and a slope with `r² < 0.3` is not a trend regardless of its sign.
+
+### 14.7 Consolidation (the justification)
+
+- **`computeTagAverages` is deleted.** `TagViewClient` reads `mean` at `grain=month`
+  instead. The trap: that function divides by calendar months from **the later of the
+  horizon start and the tag's first activity**, so a tag with three months of activity in
+  a twelve-month horizon divides by 3, not 12. A naive densified mean anchored at
+  `dateFrom` divides by 12 — a silent 4× change the user would experience as a bug. Hence
+  the `anchor: 'horizon' | 'first-activity'` option; the tag view passes
+  `first-activity`, and every case in `lib/domain/tag-averages.test.ts` is reproduced
+  **exactly** through the engine as a hard gate before the old file is removed.
+- **`computeTrailingAverage` is re-expressed later**, as `grain='budget-period'` over
+  `lib/domain/budget-period.ts`'s existing `windowForOccurrence` — budget occurrences are
+  a non-calendar grain (a monthly budget starting on the 17th trails 17th-to-17th
+  windows, which `strftime('%Y-%m')` cannot express). Sequenced last on purpose: it is a
+  behaviour-sensitive shipped surface and moves only once the engine is proven by two
+  other consumers.
+- **`getBarChart` is not replaced.** It gains a header comment stating its output is
+  sparse and must never be averaged. Convergence is optional future work.
+- **`getTransactionSummary` / `getTagSummary` are untouched** and correct at the
+  no-buckets question. A cross-check test asserts the engine's `total` reconciles with
+  both for identical filters — two money paths that *can* disagree eventually will.
+
+### 14.8 Agent Surface
+
+One tool, `get_metrics`, registered once in `lib/server/ai/tools.ts` and consumed by both
+the in-app chat and the MCP server (`lib/server/mcp/server.ts` iterates the same
+registry), so the two can never drift. Handlers call `buildSeries` + `computeMetricPack`
+directly — no HTTP hop, same as every existing tool. Defaults are applied explicitly in
+`run()` rather than relying on a Zod `.default()` to reach it, per that registry's own
+standing rule.
+
+The tool description carries §14.6's prohibitions verbatim: metrics are over time buckets
+not transactions; `null` is not zero; no trend claim below `r² 0.3`; nothing at
+sufficiency `none`; state the sample size at `weak`; never sum across currencies. A tool
+description is the only instruction an external agent ever receives, so the honesty
+contract has to live there and not in a UI layer the agent never sees.
+
+---
+
 ## 12. What We Are Not Building
 
 Explicit non-goals, current as of this rewrite:
@@ -533,4 +699,4 @@ Explicit non-goals, current as of this rewrite:
 
 ---
 
-_Document created: 2026-04-03. Rewritten in full 2026-08-21 (v2.0) to match the shipped self-hosted architecture. Status: Living document — update in the same change as any architectural shift._
+_Document created: 2026-04-03. Rewritten in full 2026-08-21 (v2.0) to match the shipped self-hosted architecture. Last updated 2026-09-11 (v2.5). Status: Living document — update in the same change as any architectural shift._
