@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-11 v2.5  |
-| **Version**      | 2.5              |
+| **Last Updated** | 2026-09-12 v2.7  |
+| **Version**      | 2.7              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -24,7 +24,7 @@
 |2.2|2026-08-26|§4a: documents `updateGeneration`/`deleteGeneration` — direct edit/delete of any generation (open or closed) by id, superseding the original "closed history is immutable" design. `updateGeneration` touches only amount/currency/type/period/custom_days/rollover, never `start_date`/`end_date`, so the partial-unique-index and CHECK-constraint invariants remain untouched by this change. `deleteGeneration` reopens the tag's previous closed generation when the deleted one was open (if one exists), and leaves a plain coverage gap when the deleted one was already closed — both in one transaction. New `PATCH`/`DELETE /api/tags/:id/budget/:generationId` routes.|
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
-|**2.5**|**2026-09-11**|**New §14 documents the Metrics engine** (designed, not built) — the technical counterpart to the PRD's F19, and the prerequisite for closing the F10 Reports launch blocker. Key decisions: the unit of analysis is a **dense, sign-normalised time bucket, never a raw transaction**, which settles what `min`/`avg`/`stdDev` even mean on an aggregate; all metric math is **pure and database-free** under `apps/web/lib/domain/metrics/`, so the entire catalog is unit-testable under the node-only vitest; series construction is **one `GROUP BY member, bucket` pass**, never one query per member, reusing `cashflowExcludeSQL`, `getDescendantTagIds` and the same `COALESCE(tt.weight, 1)` split attribution as `getTagSummary`/`getBarChart` so the three cannot disagree; **no metric ever serialises as `NaN`/`Infinity`** (JSON turns both into a bare `null` silently) — every undefined metric is `null` plus a machine-readable reason plus a sample-size sufficiency level, pinned by a dedicated guard test; and **no new tables, no cache, no materialisation** (a stale figure in a financial app is worse than a slow one), so `goaldy.sql` and the ERD are untouched. The engine is explicitly a **consolidation**: `computeTagAverages` is deleted onto it behind an exact-equivalence gate (via a new `anchor` option reproducing its first-activity divisor), and `computeTrailingAverage` is later re-expressed as a budget-period bucketing strategy over `lib/domain/budget-period.ts`'s existing occurrence windows. §12: the "no public third-party API" non-goal is unchanged — `/api/metrics` is an authenticated route on the existing surface, not a new public API.|
+|**2.7**|**2026-09-12**|**New §15 documents the planned move to integer minor units** (fixes BUG-002, the `REAL`/float64 monetary columns first recorded as an aside in §14.1), **scheduled ahead of the Metrics engine** — Metrics sums thousands of weighted rows and then computes a variance over them, which is the worst-behaved computation available on a float representation, so building it first would mean building it twice. `transaction_tags.weight` becomes basis points with a deterministic remainder rule; scale is derived per currency rather than assumed to be 2 decimal places; rate fields stay `REAL`. **New §16 documents the Metrics engine** (designed, not built) — the technical counterpart to the PRD's F19, and the prerequisite for closing the F10 Reports launch blocker. **Renumbered from §14 and reversioned from v2.5 during review**: the unmerged market/GTM branch had already taken §14 ("Distribution and Signal Architecture") at v2.6 a day earlier, and BUG-002 cites its §14.1 — so this section yields the number rather than orphaning that citation. §15 is left for Monetary Representation, which is sequenced ahead of this work. Key decisions: the unit of analysis is a **dense, sign-normalised time bucket, never a raw transaction**, which settles what `min`/`avg`/`stdDev` even mean on an aggregate; all metric math is **pure and database-free** under `apps/web/lib/domain/metrics/`, so the entire catalog is unit-testable under the node-only vitest; series construction is **one `GROUP BY member, bucket` pass**, never one query per member, reusing `cashflowExcludeSQL`, `getDescendantTagIds` and the same `COALESCE(tt.weight, 1)` split attribution as `getTagSummary`/`getBarChart` so the three cannot disagree; **no metric ever serialises as `NaN`/`Infinity`** (JSON turns both into a bare `null` silently) — every undefined metric is `null` plus a machine-readable reason plus a sample-size sufficiency level, pinned by a dedicated guard test; and **no new tables, no cache, no materialisation** (a stale figure in a financial app is worse than a slow one), so `goaldy.sql` and the ERD are untouched. The engine is explicitly a **consolidation**: `computeTagAverages` is deleted onto it behind an exact-equivalence gate (via a new `anchor` option reproducing its first-activity divisor), and `computeTrailingAverage` is later re-expressed as a budget-period bucketing strategy over `lib/domain/budget-period.ts`'s existing occurrence windows. §12: the "no public third-party API" non-goal is unchanged — `/api/metrics` is an authenticated route on the existing surface, not a new public API.|
 
 ---
 
@@ -516,13 +516,110 @@ architecture.
 
 ---
 
-## 14. Metrics Engine (Designed, Not Built)
+## 15. Monetary Representation — Integer Minor Units (Planned, Scheduled Ahead of §16)
+
+Fixes **BUG-002** (`docs/bugs/2026-09-11-002-money-stored-as-float.md` in the app repo),
+first recorded as an aside in §14.1. Design:
+`docs/superpowers/specs/2026-09-12-monetary-representation-design.md`. Plan:
+`docs/superpowers/plans/2026-09-12-monetary-representation.md`.
+
+### 15.1 The defect
+
+Every monetary column is SQLite `REAL` — IEEE-754 binary float64. Decimal values such as
+`0.1` have no exact binary representation, so arithmetic over many rows accumulates
+error. Four features chain that arithmetic and therefore expose it: **split weights,
+budget rollover, running balances, and FX conversion.**
+
+`transaction_tags.weight` is the sharpest case, and the one that decided the sequencing.
+It is a *multiplier* applied to an amount, so its error compounds with the amount's own,
+and it is read by every tag-scoped money query in the app (`getTagSummary`, `getBarChart`,
+`getTagFlow`, `sumTaggedActualInRange`). A 3-way even split of an indivisible amount
+cannot sum back to the original in binary float: `100/3` thrice is `99.99999999999999`.
+
+The symptom is a balance that is off by a cent and will not reconcile against the bank —
+the one failure a personal-finance ledger cannot afford, because it discredits every
+other number on the screen.
+
+### 15.2 Why now, and why before §16
+
+**Cost of repair is inversely proportional to how long you wait.** With an effectively
+empty production dataset this is a schema change plus a mechanical sweep. After real
+users hold multi-year ledgers it becomes a data migration with correctness risk requiring
+before/after reconciliation of every balance, budget and projection — and any error in it
+is an error in someone's financial history.
+
+It is sequenced **ahead of the Metrics engine (§16)** for a specific reason, not merely
+because it is older work. Metrics sums thousands of bucketed rows, multiplies each by
+`transaction_tags.weight`, and then computes a **variance** over the result. A sample
+standard deviation is the worst-behaved computation available on this representation:
+catastrophic cancellation in a sum-of-squares over values that already carry accumulated
+error. §16's design hedges this by requiring σ be verified two ways — but a test that
+detects the problem is not a fix for it, and building a statistics engine on a numeric
+representation already known to be wrong means building it twice.
+
+It is also cheapest done **alongside** other schema work. BUG-001 introduces
+`asset_valuations`, which would otherwise be created with the same defect — so if both
+are scheduled, this one goes first.
+
+### 15.3 The representation
+
+**Integer minor units.** Money becomes `INTEGER NOT NULL`, counted in the currency's
+smallest unit (agorot for ILS, cents for USD/EUR). Exact, fast, and the conventional
+choice for a ledger.
+
+The scale is **derived from the currency code**, not assumed to be 2: most ISO-4217
+currencies carry two decimal places, but JPY and KRW carry zero and BHD, KWD and JOD
+carry three. Goaldy is multi-currency by design and stores a currency per transaction, so
+a hardcoded `× 100` would silently corrupt any zero- or three-decimal currency. Scale
+lookup and both conversions live in **one module**; no query performs arithmetic on a raw
+stored value.
+
+`transaction_tags.weight` becomes **basis points** (`INTEGER`, `10000` = 100%), so split
+allocation is exact integer arithmetic. The indivisible remainder is assigned
+**deterministically to the largest split** (ties broken by `position`) rather than left to
+rounding — and which split receives it is pinned by a test, because "it rounds somewhere"
+is how a ledger loses a cent nobody can find.
+
+**Rate fields stay `REAL` and are explicitly out of scope**: `ai_confidence`,
+`inflation_rate`, `return_rate_override`, `target_return_rate`. These are genuine real
+numbers, not money.
+
+### 15.4 Blast radius
+
+Wide but shallow — the money math is well-localised: `lib/server/queries/*` (the SQL),
+`lib/domain/*` (accounting helpers, the plan engine), the Zod schemas in
+`packages/schema/`, the importers and exporters, and the currency formatting layer.
+
+**The API boundary is the decision point.** Two options, and the spec picks one:
+converting at the query layer (every REST response keeps today's decimal shape, nothing
+external breaks) versus exposing minor units on the wire (honest, but a breaking change
+for the Moneyman webhook, the ingest endpoint, every AI tool and every export profile).
+The migration itself is `semver:major` either way because the **backup format** changes
+shape; whether the *REST* surface also changes is a separate call the spec makes
+explicitly rather than by accident.
+
+### 15.5 The safety net
+
+`lib/server/restore/roundtrip.test.ts` is already CI-gating and already does a **full-row
+diff** rather than a spot-check, so a type change that loses fidelity anywhere fails it.
+Per CLAUDE.md, a failure there is treated as a real defect and never as a test to relax —
+which is exactly the discipline this migration needs.
+
+Added on top: a reconciliation harness asserting every account balance, budget generation,
+running balance and plan projection is **identical** before and after; a split-exactness
+test (a 3-way split of an indivisible amount sums back to the original, with the
+remainder's destination pinned); a rollover test across many generations; and a rule that
+FX conversion rounds **once, at the boundary**, never per row.
+
+---
+
+## 16. Metrics Engine (Designed, Not Built)
 
 The technical counterpart to PRD §F19. Full design, including the metric catalog and
 every definedness rule: `docs/superpowers/specs/2026-09-11-metrics-engine-design.md`.
 Phased plan: `docs/superpowers/plans/2026-09-11-metrics-engine.md`.
 
-### 14.1 The Problem It Solves
+### 16.1 The Problem It Solves
 
 Six code paths already compute "money over a window":
 
@@ -539,9 +636,9 @@ The last two are already metrics, built ad hoc, with **different divisor rules**
 third is a series nothing may average — `mean` over its output omits the zero buckets
 entirely — and nothing in the code says so. A seventh ad-hoc implementation would make
 this strictly worse, so the engine is scoped as a **consolidation that deletes two of
-these**, not as an addition. §14.7 is the load-bearing part of this section.
+these**, not as an addition. §16.7 is the load-bearing part of this section.
 
-### 14.2 Layering
+### 16.2 Layering
 
 ```
 packages/schema/metrics.ts              Zod + types; no SQL, no new tables
@@ -561,7 +658,7 @@ Everything under `lib/domain/metrics/` is **pure and `.ts`** — vitest runs
 database and zero HTTP. The server layer does no metric math; the domain layer does no
 I/O. A bug is therefore provably in one side or the other.
 
-### 14.3 Series Construction
+### 16.3 Series Construction
 
 `buildSeries()` runs **one `GROUP BY member, bucket` pass**, never one query per member —
 a per-member loop against a tag tree is an N+1. It reuses, rather than reimplements:
@@ -588,7 +685,7 @@ be worse than one that is consistently non-ISO. Every bucket also carries real I
 by `Date.parse`** — a trap already documented at length in `lib/domain/tag-averages.ts`.
 Nothing may parse `key`.
 
-### 14.4 Currency and FX
+### 16.4 Currency and FX
 
 Matches the conventions already in force, deliberately:
 
@@ -605,7 +702,7 @@ the response states `fxBasis: 'current-rates'` because the opposite assumption i
 natural one. Historical-rate series would need a rate-history table the app does not have
 and are out of scope.
 
-### 14.5 No New Tables, No Cache
+### 16.5 No New Tables, No Cache
 
 `goaldy.sql` is **untouched** and `pnpm erd:generate` is not required. Every figure is
 computed live from `transactions` + `transaction_tags` on request. There is no metrics
@@ -620,7 +717,7 @@ guard returns 400 with a message naming the remedy ("coarsen `grain` to `month`"
 `includeBuckets` defaults to `false` so the common agent call returns a compact metric
 pack.
 
-### 14.6 The Non-Finite Guarantee
+### 16.6 The Non-Finite Guarantee
 
 **No metric ever serialises from `NaN` or `Infinity`.**
 
@@ -642,7 +739,7 @@ Two derived rules bind consumers, both in the UI and in the `get_metrics` tool
 description: nothing from the distribution or trend families may be rendered or asserted
 at `level === 'none'`, and a slope with `r² < 0.3` is not a trend regardless of its sign.
 
-### 14.7 Consolidation (the justification)
+### 16.7 Consolidation (the justification)
 
 - **`computeTagAverages` is deleted.** `TagViewClient` reads `mean` at `grain=month`
   instead. The trap: that function divides by calendar months from **the later of the
@@ -664,7 +761,7 @@ at `level === 'none'`, and a slope with `r² < 0.3` is not a trend regardless of
   no-buckets question. A cross-check test asserts the engine's `total` reconciles with
   both for identical filters — two money paths that *can* disagree eventually will.
 
-### 14.8 Agent Surface
+### 16.8 Agent Surface
 
 One tool, `get_metrics`, registered once in `lib/server/ai/tools.ts` and consumed by both
 the in-app chat and the MCP server (`lib/server/mcp/server.ts` iterates the same
@@ -673,7 +770,7 @@ directly — no HTTP hop, same as every existing tool. Defaults are applied expl
 `run()` rather than relying on a Zod `.default()` to reach it, per that registry's own
 standing rule.
 
-The tool description carries §14.6's prohibitions verbatim: metrics are over time buckets
+The tool description carries §16.6's prohibitions verbatim: metrics are over time buckets
 not transactions; `null` is not zero; no trend claim below `r² 0.3`; nothing at
 sufficiency `none`; state the sample size at `weak`; never sum across currencies. A tool
 description is the only instruction an external agent ever receives, so the honesty
@@ -699,4 +796,4 @@ Explicit non-goals, current as of this rewrite:
 
 ---
 
-_Document created: 2026-04-03. Rewritten in full 2026-08-21 (v2.0) to match the shipped self-hosted architecture. Last updated 2026-09-11 (v2.5). Status: Living document — update in the same change as any architectural shift._
+_Document created: 2026-04-03. Rewritten in full 2026-08-21 (v2.0) to match the shipped self-hosted architecture. Last updated 2026-09-12 (v2.7). Status: Living document — update in the same change as any architectural shift._
