@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-13 v2.10 |
-| **Version**      | 2.10             |
+| **Last Updated** | 2026-09-13 v2.11 |
+| **Version**      | 2.11             |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -28,6 +28,7 @@
 |2.8|2026-09-13|§16.7 records the first piece of the metrics work to actually ship: the shared SQL primitives (`lib/server/sql/`). Six copies of the split-weighted amount expression and two of the bucket-label expression collapsed to one each, guarded against a seventh. No behaviour change; it lands ahead of the engine because it is also what reduces the monetary-representation sweep (§15) from an eight-site edit to a two-site one.|
 |2.9|2026-09-13|**§15 is BUILT, not planned.** The ledger stores integer minor units with a `CHECK (typeof(col) = 'integer')` on every money column — SQLite types are affinities, not constraints, so the declaration alone enforces nothing. Measured on the real 5,734-row export: account balances disagreeing with an exact sum went 6 of 26 -> 0, income/expense figures 8 of 22 -> 0, and tag shares that fail to reassemble to 0 of 5,313. The count of non-representable stored values did NOT change (0 before, 0 after) and that is the point: before it was luck, now it is enforced. Two findings worth carrying: Phase 4's "13 accumulators" barely needed touching (integer `+=` is already exact — the work was the read/write boundary and the handful of genuine divisions), and the conversion surfaced a dedup fingerprint that hashed through `.toFixed(2)`, so two KWD amounts one fils apart deduped as the same transaction. §15.6 records the measured result.|
 |2.10|2026-09-13|**§16 (Metrics) is built through its consolidation phase**, and one claim in it is corrected rather than quietly dropped. `GET /api/metrics` is live, the domain layer's real file list replaces the one this section guessed at, and `computeTagAverages` is deleted — the tag view reads `mean` at month grain. §16.7's assertion that every old test case would be **reproduced exactly** through the engine was **withdrawn**: the two divisor rules are genuinely different (`round(spanDays / 30.44)` against the mean of the complete calendar months), and matching the old numbers would have meant tuning the engine to a heuristic worth less than the rule replacing it. The divergence is measured and frozen in `queries/tag-averages-divergence.test.ts`. Two mechanics the anchor needed are recorded: `measurement.clipFrom` (only the caller's horizon may flag a leading bucket partial — the anchor may not, or a young tag loses its first month and falls below the render floor) and `mean === null` as the exact form of the retired 28-day threshold.|
+|2.11|2026-09-13|**Three things §16 said were built and were not**, found on the way into the UI phase and now shipped. (1) **Group F had tests and no caller** — the seven budget metrics were computable in the domain layer and unreachable through the API. Wired, over the **budget's own occurrence windows** rather than the series' grain, because a budget's contract is its occurrence window: a 17th-to-17th budget cannot be checked against calendar September. The response carries a `budget` object stating the allowance, converted to the series' currency. Rollover budgets withhold all of Group F with reason `budget-rollover`. (2) **Period inference no longer skips when a budget resolves the period.** That saving cost the one genuinely new capability in §9a C1: a monthly budget on annual spending is a misconfigured budget, and only a running inference can say so. (3) **`members` (csv, ≤50) and `orderBy`/`limit`** — design §5.2 and Q6 make both Phase 2 requirements and the plan omitted them. The response now matches design §5.3: `{ query, baseCurrency, fxBasis, series: [] }`, always an array. The batch is a LOOP, bounded by the 50-series cap — §7a measured one tag at 0.26 ms, and a single `GROUP BY member, bucket` pass needs a descendant-to-member CTE that no measurement has yet demanded. Ranking is in TypeScript because the ranked metrics are derived: there is no `ORDER BY cv` to write, and what "server-side" buys is a review screen fetching K series instead of fifty.|
 
 ---
 
@@ -699,8 +700,9 @@ the load-bearing part of this section; one of the two is now gone.
 packages/schema/metrics.ts              Zod + types; no SQL, no new tables
 apps/web/lib/domain/metrics/            PURE, database-free, node-testable
   result.ts  stats.ts  trend.ts  anomaly.ts
-  bucket-windows.ts  period-inference.ts  scope.ts  budget-metrics.ts  pack.ts
-apps/web/lib/server/queries/metrics.ts  getMetrics() — the two-pass series builder
+  bucket-windows.ts  period-inference.ts  scope.ts
+  budget-metrics.ts  budget-pack.ts  pack.ts
+apps/web/lib/server/queries/metrics.ts  getMetrics() one series; getMetricsBatch() N
 apps/web/app/api/metrics/route.ts       withAuth + validation + cost guards
 apps/web/lib/queries/metrics.ts         thin fetch wrapper
 apps/web/lib/hooks/useMetrics.ts        react-query hook + query key
