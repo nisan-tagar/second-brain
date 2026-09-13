@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-13 v2.9  |
-| **Version**      | 2.9              |
+| **Last Updated** | 2026-09-13 v2.10 |
+| **Version**      | 2.10             |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -27,6 +27,7 @@
 |**2.7**|**2026-09-12**|**New §15 documents the planned move to integer minor units** (fixes BUG-002, the `REAL`/float64 monetary columns first recorded as an aside in §14.1), **scheduled ahead of the Metrics engine** — Metrics sums thousands of weighted rows and then computes a variance over them, which is the worst-behaved computation available on a float representation, so building it first would mean building it twice. `transaction_tags.weight` becomes basis points with a deterministic remainder rule; scale is derived per currency rather than assumed to be 2 decimal places; rate fields stay `REAL`. **New §16 documents the Metrics engine** (designed, not built) — the technical counterpart to the PRD's F19, and the prerequisite for closing the F10 Reports launch blocker. **Renumbered from §14 and reversioned from v2.5 during review**: the unmerged market/GTM branch had already taken §14 ("Distribution and Signal Architecture") at v2.6 a day earlier, and BUG-002 cites its §14.1 — so this section yields the number rather than orphaning that citation. §15 is left for Monetary Representation, which is sequenced ahead of this work. Key decisions: the unit of analysis is a **dense, sign-normalised time bucket, never a raw transaction**, which settles what `min`/`avg`/`stdDev` even mean on an aggregate; all metric math is **pure and database-free** under `apps/web/lib/domain/metrics/`, so the entire catalog is unit-testable under the node-only vitest; series construction is **one `GROUP BY member, bucket` pass**, never one query per member, reusing `cashflowExcludeSQL`, `getDescendantTagIds` and the same `COALESCE(tt.weight, 1)` split attribution as `getTagSummary`/`getBarChart` so the three cannot disagree; **no metric ever serialises as `NaN`/`Infinity`** (JSON turns both into a bare `null` silently) — every undefined metric is `null` plus a machine-readable reason plus a sample-size sufficiency level, pinned by a dedicated guard test; and **no new tables, no cache, no materialisation** (a stale figure in a financial app is worse than a slow one), so `goaldy.sql` and the ERD are untouched. The engine is explicitly a **consolidation**: `computeTagAverages` is deleted onto it behind an exact-equivalence gate (via a new `anchor` option reproducing its first-activity divisor), and `computeTrailingAverage` is later re-expressed as a budget-period bucketing strategy over `lib/domain/budget-period.ts`'s existing occurrence windows. §12: the "no public third-party API" non-goal is unchanged — `/api/metrics` is an authenticated route on the existing surface, not a new public API.|
 |2.8|2026-09-13|§16.7 records the first piece of the metrics work to actually ship: the shared SQL primitives (`lib/server/sql/`). Six copies of the split-weighted amount expression and two of the bucket-label expression collapsed to one each, guarded against a seventh. No behaviour change; it lands ahead of the engine because it is also what reduces the monetary-representation sweep (§15) from an eight-site edit to a two-site one.|
 |2.9|2026-09-13|**§15 is BUILT, not planned.** The ledger stores integer minor units with a `CHECK (typeof(col) = 'integer')` on every money column — SQLite types are affinities, not constraints, so the declaration alone enforces nothing. Measured on the real 5,734-row export: account balances disagreeing with an exact sum went 6 of 26 -> 0, income/expense figures 8 of 22 -> 0, and tag shares that fail to reassemble to 0 of 5,313. The count of non-representable stored values did NOT change (0 before, 0 after) and that is the point: before it was luck, now it is enforced. Two findings worth carrying: Phase 4's "13 accumulators" barely needed touching (integer `+=` is already exact — the work was the read/write boundary and the handful of genuine divisions), and the conversion surfaced a dedup fingerprint that hashed through `.toFixed(2)`, so two KWD amounts one fils apart deduped as the same transaction. §15.6 records the measured result.|
+|2.10|2026-09-13|**§16 (Metrics) is built through its consolidation phase**, and one claim in it is corrected rather than quietly dropped. `GET /api/metrics` is live, the domain layer's real file list replaces the one this section guessed at, and `computeTagAverages` is deleted — the tag view reads `mean` at month grain. §16.7's assertion that every old test case would be **reproduced exactly** through the engine was **withdrawn**: the two divisor rules are genuinely different (`round(spanDays / 30.44)` against the mean of the complete calendar months), and matching the old numbers would have meant tuning the engine to a heuristic worth less than the rule replacing it. The divergence is measured and frozen in `queries/tag-averages-divergence.test.ts`. Two mechanics the anchor needed are recorded: `measurement.clipFrom` (only the caller's horizon may flag a leading bucket partial — the anchor may not, or a young tag loses its first month and falls below the render floor) and `mean === null` as the exact form of the retired 28-day threshold.|
 
 ---
 
@@ -660,11 +661,17 @@ restored after it, and `preflightRestore` lists nothing as restorable into schem
 
 ---
 
-## 16. Metrics Engine (Designed, Not Built)
+## 16. Metrics Engine (Built Through Consolidation)
 
 The technical counterpart to PRD §F19. Full design, including the metric catalog and
 every definedness rule: `docs/superpowers/specs/2026-09-11-metrics-engine-design.md`.
 Phased plan: `docs/superpowers/plans/2026-09-11-metrics-engine.md`.
+
+**Built:** the pure catalog, bucketing (calendar grains plus a budget's own occurrence
+windows), period inference, two-scope window resolution, `GET /api/metrics`, and the
+first consolidation — `computeTagAverages` is deleted (§16.7). **Not built:** the
+`get_metrics` agent tool (§16.8), the UI surfaces beyond the tag view, and the
+`computeTrailingAverage` re-expression.
 
 ### 16.1 The Problem It Solves
 
@@ -677,27 +684,28 @@ Six code paths already compute "money over a window":
 | `getBarChart` | yes | **sparse** — a bucket with no rows is absent, not zero |
 | `getBalanceHistory` | yes | a stock series, not a flow |
 | `computeTrailingAverage` | yes | budget-period buckets, own sign resolution |
-| `computeTagAverages` | no | divides by calendar months from first activity |
+| ~~`computeTagAverages`~~ | no | **deleted 2026-09-13** — divided by mean-length months from first activity |
 
-The last two are already metrics, built ad hoc, with **different divisor rules**. The
+The last two were already metrics, built ad hoc, with **different divisor rules**. The
 third is a series nothing may average — `mean` over its output omits the zero buckets
-entirely — and nothing in the code says so. A seventh ad-hoc implementation would make
-this strictly worse, so the engine is scoped as a **consolidation that deletes two of
-these**, not as an addition. §16.7 is the load-bearing part of this section.
+entirely — and nothing in the code said so, until it did (that header comment now
+exists). A seventh ad-hoc implementation would make this strictly worse, so the engine
+is scoped as a **consolidation that deletes two of these**, not as an addition. §16.7 is
+the load-bearing part of this section; one of the two is now gone.
 
 ### 16.2 Layering
 
 ```
 packages/schema/metrics.ts              Zod + types; no SQL, no new tables
 apps/web/lib/domain/metrics/            PURE, database-free, node-testable
-  stats.ts  trend.ts  anomaly.ts
-  bucket-calendar.ts  sufficiency.ts  compute.ts
-apps/web/lib/server/queries/metrics.ts  buildSeries() — the ONE bucketing query
-apps/web/app/api/metrics/route.ts       withAuth + Zod validation + cost guards
+  result.ts  stats.ts  trend.ts  anomaly.ts
+  bucket-windows.ts  period-inference.ts  scope.ts  budget-metrics.ts  pack.ts
+apps/web/lib/server/queries/metrics.ts  getMetrics() — the two-pass series builder
+apps/web/app/api/metrics/route.ts       withAuth + validation + cost guards
 apps/web/lib/queries/metrics.ts         thin fetch wrapper
 apps/web/lib/hooks/useMetrics.ts        react-query hook + query key
 apps/web/lib/server/ai/tools.ts         one `get_metrics` tool (chat + MCP, one registry)
-apps/web/components/ui/metric-tile.tsx  the shared display primitive
+                                        — NOT BUILT YET
 ```
 
 Everything under `lib/domain/metrics/` is **pure and `.ts`** — vitest runs
@@ -805,24 +813,42 @@ at `level === 'none'`, and a slope with `r² < 0.3` is not a trend regardless of
   horizon start and the tag's first activity**, so a tag with three months of activity in
   a twelve-month horizon divides by 3, not 12. A naive densified mean anchored at
   `dateFrom` divides by 12 — a silent 4× change the user would experience as a bug. Hence
-  the `anchor: 'horizon' | 'first-activity'` option; the tag view passes
-  `first-activity`, and every case in `lib/domain/tag-averages.test.ts` is reproduced
-  **exactly** through the engine as a hard gate before the old file is removed.
+  the `anchor: 'horizon' | 'first-activity'` option, and the tag view passes
+  `first-activity`.
+
+  **The "reproduced exactly" gate this section used to assert was withdrawn** — it
+  cannot hold, and pretending otherwise would have meant tuning the engine to match a
+  heuristic worth less than the rule replacing it. The old function divided the horizon's
+  **total** by `round(spanDays / 30.44)`; the engine takes the **mean of the complete
+  calendar months** in the window. The divisors agree on nearly every real horizon (365
+  days rounds to 12 and holds 11 whole months plus two halves), so what moves is the
+  average — the old numerator carried a clipped month's spending against a whole-month
+  divisor. The divergence is measured per case in
+  `lib/server/queries/tag-averages-divergence.test.ts`, with the old values frozen as
+  constants; PRD §F19.6 states the user-facing rule.
+
+  Two mechanics the anchor needed. **`ResolvedScopes.measurement.clipFrom`**: a leading
+  bucket is `partial` only when the *caller's* horizon cut data off it, never when the
+  anchor moved the window forward — nothing exists before a tag's first transaction, so
+  the month holding it is complete, and without this distinction a three-month-old tag
+  lost its first month and fell below the render floor. And **the 28-day threshold was a
+  proxy** for "we have no whole month"; its exact form is `mean === null`.
 - **`computeTrailingAverage` is re-expressed later**, as `grain='budget-period'` over
   `lib/domain/budget-period.ts`'s existing `windowForOccurrence` — budget occurrences are
   a non-calendar grain (a monthly budget starting on the 17th trails 17th-to-17th
   windows, which `strftime('%Y-%m')` cannot express). Sequenced last on purpose: it is a
   behaviour-sensitive shipped surface and moves only once the engine is proven by two
   other consumers.
-- **`getBarChart` is not replaced.** It gains a header comment stating its output is
-  sparse and must never be averaged. Convergence is optional future work.
+- **`getBarChart` is not replaced — ✅ header comment shipped 2026-09-13.** Its output is
+  sparse and must never be averaged, and its bucket labels are display strings, not dates.
+  Convergence is optional future work.
 - **`getTransactionSummary` / `getTagSummary` are untouched** and correct at the
   no-buckets question. A cross-check test asserts the engine's `total` reconciles with
   both for identical filters — two money paths that *can* disagree eventually will.
 
 ### 16.8 Agent Surface
 
-One tool, `get_metrics`, registered once in `lib/server/ai/tools.ts` and consumed by both
+**Not built yet.** One tool, `get_metrics`, registered once in `lib/server/ai/tools.ts` and consumed by both
 the in-app chat and the MCP server (`lib/server/mcp/server.ts` iterates the same
 registry), so the two can never drift. Handlers call `buildSeries` + `computeMetricPack`
 directly — no HTTP hop, same as every existing tool. Defaults are applied explicitly in
