@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-12 v2.7  |
-| **Version**      | 2.7              |
+| **Last Updated** | 2026-09-13 v2.8  |
+| **Version**      | 2.8              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -25,6 +25,7 @@
 |2.3|2026-08-27|**Mobile-responsive foundation shipped — new §11a.** CSS-only dual-shell switch (both desktop and mobile shells always mounted server-side, toggled by `hidden md:flex`/`flex md:hidden` — no JS viewport-detection hook, since `(app)/layout.tsx` is a server component); hamburger-drawer navigation with Settings relocated to a top-bar overflow menu; `Modal` gained a `variant: 'sheet' \| 'drawer'` prop so the drawer reuses the same shared modal shell (Escape/focus-trap/scroll-lock/dialog-role) instead of a second hand-rolled overlay; new `/accounts` list screen grouped by `liquidityClass`; `AccountSelector`'s left-edge dropdown-clamp bug fixed as an unrelated side effect.|
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
 |**2.7**|**2026-09-12**|**New §15 documents the planned move to integer minor units** (fixes BUG-002, the `REAL`/float64 monetary columns first recorded as an aside in §14.1), **scheduled ahead of the Metrics engine** — Metrics sums thousands of weighted rows and then computes a variance over them, which is the worst-behaved computation available on a float representation, so building it first would mean building it twice. `transaction_tags.weight` becomes basis points with a deterministic remainder rule; scale is derived per currency rather than assumed to be 2 decimal places; rate fields stay `REAL`. **New §16 documents the Metrics engine** (designed, not built) — the technical counterpart to the PRD's F19, and the prerequisite for closing the F10 Reports launch blocker. **Renumbered from §14 and reversioned from v2.5 during review**: the unmerged market/GTM branch had already taken §14 ("Distribution and Signal Architecture") at v2.6 a day earlier, and BUG-002 cites its §14.1 — so this section yields the number rather than orphaning that citation. §15 is left for Monetary Representation, which is sequenced ahead of this work. Key decisions: the unit of analysis is a **dense, sign-normalised time bucket, never a raw transaction**, which settles what `min`/`avg`/`stdDev` even mean on an aggregate; all metric math is **pure and database-free** under `apps/web/lib/domain/metrics/`, so the entire catalog is unit-testable under the node-only vitest; series construction is **one `GROUP BY member, bucket` pass**, never one query per member, reusing `cashflowExcludeSQL`, `getDescendantTagIds` and the same `COALESCE(tt.weight, 1)` split attribution as `getTagSummary`/`getBarChart` so the three cannot disagree; **no metric ever serialises as `NaN`/`Infinity`** (JSON turns both into a bare `null` silently) — every undefined metric is `null` plus a machine-readable reason plus a sample-size sufficiency level, pinned by a dedicated guard test; and **no new tables, no cache, no materialisation** (a stale figure in a financial app is worse than a slow one), so `goaldy.sql` and the ERD are untouched. The engine is explicitly a **consolidation**: `computeTagAverages` is deleted onto it behind an exact-equivalence gate (via a new `anchor` option reproducing its first-activity divisor), and `computeTrailingAverage` is later re-expressed as a budget-period bucketing strategy over `lib/domain/budget-period.ts`'s existing occurrence windows. §12: the "no public third-party API" non-goal is unchanged — `/api/metrics` is an authenticated route on the existing surface, not a new public API.|
+|2.8|2026-09-13|§16.7 records the first piece of the metrics work to actually ship: the shared SQL primitives (`lib/server/sql/`). Six copies of the split-weighted amount expression and two of the bucket-label expression collapsed to one each, guarded against a seventh. No behaviour change; it lands ahead of the engine because it is also what reduces the monetary-representation sweep (§15) from an eight-site edit to a two-site one.|
 
 ---
 
@@ -741,6 +742,18 @@ at `level === 'none'`, and a slope with `r² < 0.3` is not a trend regardless of
 
 ### 16.7 Consolidation (the justification)
 
+- **The shared SQL primitives are extracted — ✅ shipped 2026-09-13, ahead of the engine.**
+  `lib/server/sql/tag-join.ts` holds `weightedAmountSQL()` (the split-weighted amount,
+  previously hand-written in six query sites) and `tagJoinSQL()` (the `transaction_tags`
+  ON clause, previously five); `lib/server/sql/buckets.ts` holds `bucketExprSQL()` (the
+  bucket label, previously two — the second site's comment read "Mirrors getBarChart's
+  bucketing", which is a duplication notice rather than a design).
+  `lib/dev/money-sql-guard.test.ts` fails the build on a hand-written copy, the same
+  mechanism as the modal and button guards. This is sequenced first, before the engine
+  exists, for two reasons: the engine must be written *against* these rather than beside
+  them, and §15's move to integer minor units rewrites the weighted-amount expression into
+  a deterministic `allocate()` — one site instead of six. It carries no behaviour change
+  and would have been worth doing even if the metrics engine were cancelled.
 - **`computeTagAverages` is deleted.** `TagViewClient` reads `mean` at `grain=month`
   instead. The trap: that function divides by calendar months from **the later of the
   horizon start and the tag's first activity**, so a tag with three months of activity in
