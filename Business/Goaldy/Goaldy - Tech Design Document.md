@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-13 v2.8  |
-| **Version**      | 2.8              |
+| **Last Updated** | 2026-09-13 v2.9  |
+| **Version**      | 2.9              |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -26,6 +26,7 @@
 |2.4|2026-08-29|**New §13 documents the planned Goaldy.AI architecture** (roadmap, not built) — the technical counterpart to the PRD's F18. Key decision: licensing/entitlement state cannot live in `goaldy.db` (§0/§5's single-tenant, no-`users`-table model holds), so a small, separately-run licensing service (Stripe-backed, one table, issues short-lived signed entitlement tokens) is architected as a second, distinct system rather than a new subsystem of the Next.js app — the self-hosted instance verifies that token's signature locally/offline (public key baked into the Docker image) rather than phoning home per-request. The planned MCP server is designed to be generated from the same OpenAPI 3.1 surface `lib/server/openapi.ts` already produces, and mints its own credentials through the *existing* scoped bearer-token mechanism (§5) — the licensing token only gates whether that capability is unlocked. §12: the blanket "no Stripe, no paid tiers" non-goal is corrected to point at §13 instead of asserting nothing will ever be gated.|
 |**2.7**|**2026-09-12**|**New §15 documents the planned move to integer minor units** (fixes BUG-002, the `REAL`/float64 monetary columns first recorded as an aside in §14.1), **scheduled ahead of the Metrics engine** — Metrics sums thousands of weighted rows and then computes a variance over them, which is the worst-behaved computation available on a float representation, so building it first would mean building it twice. `transaction_tags.weight` becomes basis points with a deterministic remainder rule; scale is derived per currency rather than assumed to be 2 decimal places; rate fields stay `REAL`. **New §16 documents the Metrics engine** (designed, not built) — the technical counterpart to the PRD's F19, and the prerequisite for closing the F10 Reports launch blocker. **Renumbered from §14 and reversioned from v2.5 during review**: the unmerged market/GTM branch had already taken §14 ("Distribution and Signal Architecture") at v2.6 a day earlier, and BUG-002 cites its §14.1 — so this section yields the number rather than orphaning that citation. §15 is left for Monetary Representation, which is sequenced ahead of this work. Key decisions: the unit of analysis is a **dense, sign-normalised time bucket, never a raw transaction**, which settles what `min`/`avg`/`stdDev` even mean on an aggregate; all metric math is **pure and database-free** under `apps/web/lib/domain/metrics/`, so the entire catalog is unit-testable under the node-only vitest; series construction is **one `GROUP BY member, bucket` pass**, never one query per member, reusing `cashflowExcludeSQL`, `getDescendantTagIds` and the same `COALESCE(tt.weight, 1)` split attribution as `getTagSummary`/`getBarChart` so the three cannot disagree; **no metric ever serialises as `NaN`/`Infinity`** (JSON turns both into a bare `null` silently) — every undefined metric is `null` plus a machine-readable reason plus a sample-size sufficiency level, pinned by a dedicated guard test; and **no new tables, no cache, no materialisation** (a stale figure in a financial app is worse than a slow one), so `goaldy.sql` and the ERD are untouched. The engine is explicitly a **consolidation**: `computeTagAverages` is deleted onto it behind an exact-equivalence gate (via a new `anchor` option reproducing its first-activity divisor), and `computeTrailingAverage` is later re-expressed as a budget-period bucketing strategy over `lib/domain/budget-period.ts`'s existing occurrence windows. §12: the "no public third-party API" non-goal is unchanged — `/api/metrics` is an authenticated route on the existing surface, not a new public API.|
 |2.8|2026-09-13|§16.7 records the first piece of the metrics work to actually ship: the shared SQL primitives (`lib/server/sql/`). Six copies of the split-weighted amount expression and two of the bucket-label expression collapsed to one each, guarded against a seventh. No behaviour change; it lands ahead of the engine because it is also what reduces the monetary-representation sweep (§15) from an eight-site edit to a two-site one.|
+|2.9|2026-09-13|**§15 is BUILT, not planned.** The ledger stores integer minor units with a `CHECK (typeof(col) = 'integer')` on every money column — SQLite types are affinities, not constraints, so the declaration alone enforces nothing. Measured on the real 5,734-row export: account balances disagreeing with an exact sum went 6 of 26 -> 0, income/expense figures 8 of 22 -> 0, and tag shares that fail to reassemble to 0 of 5,313. The count of non-representable stored values did NOT change (0 before, 0 after) and that is the point: before it was luck, now it is enforced. Two findings worth carrying: Phase 4's "13 accumulators" barely needed touching (integer `+=` is already exact — the work was the read/write boundary and the handful of genuine divisions), and the conversion surfaced a dedup fingerprint that hashed through `.toFixed(2)`, so two KWD amounts one fils apart deduped as the same transaction. §15.6 records the measured result.|
 
 ---
 
@@ -517,7 +518,7 @@ architecture.
 
 ---
 
-## 15. Monetary Representation — Integer Minor Units (Planned, Scheduled Ahead of §16)
+## 15. Monetary Representation — Integer Minor Units (BUILT 2026-09-13)
 
 Fixes **BUG-002** (`docs/bugs/2026-09-11-002-money-stored-as-float.md` in the app repo),
 first recorded as an aside in §14.1. Design:
@@ -611,6 +612,51 @@ running balance and plan projection is **identical** before and after; a split-e
 test (a 3-way split of an indivisible amount sums back to the original, with the
 remainder's destination pinned); a rollover test across many generations; and a rule that
 FX conversion rounds **once, at the boundary**, never per row.
+
+---
+
+### 15.6 Measured result
+
+Both measurements ran `pnpm measure:float` against the same anonymised 5,734-row export,
+through the app's real query layer rather than a replica of it.
+
+| | Before | After |
+|---|---:|---:|
+| Account balances disagreeing with an exact sum | 6 of 26 | **0** |
+| Income/expense figures disagreeing | 8 of 22 | **0** |
+| Transactions whose tag shares fail to reassemble | leaked on every odd split | **0 of 5,313** |
+| Budget Actuals disagreeing | 0 of 49 | 0 of 49 |
+| Stored values not exactly representable | 0 — *by luck* | 0 — *by CHECK constraint* |
+
+**The last row is the finding.** The count did not move. What moved is whether anything
+requires it to: `INTEGER` plus `CHECK (typeof(col) = 'integer')` makes a decimal
+unstorable, where before every amount merely happened to land on a representable float.
+
+**The books were never wrong.** No user saw a bad total; the six drifting balances were
+invisible at two decimal places. This was not a repair — it closed a class of bug (the kind
+that answers "is this exactly zero" wrongly and looks reasonable doing it) before §16
+multiplied the number of places that question is asked.
+
+Three things the build changed relative to the design:
+
+1. **Phase 4 was much smaller than planned.** The design budgeted "13 TypeScript
+   accumulators". Integer `+=` is already exact, so almost none needed rewriting; the work
+   was the read/write boundary (`lib/server/money-row.ts`) and the handful of genuine
+   DIVISIONS. Addition stopped being a problem the moment its inputs stopped being floats.
+2. **SQL cannot allocate** (design D16), so a split's share is STORED on
+   `transaction_tags.amount_minor` rather than re-derived per row. `weightedAmountSQL()` is
+   deleted, not rewritten: `ROUND(amount * weight)` per row does not conserve.
+3. **Four money columns had no currency at all** (design D17) and were implicitly in a
+   user-writable display setting. Under decimals that was a mislabelling; under minor units
+   it would have been a hundredfold error — a regression the fix itself would have
+   introduced. They now snapshot their currency, and the plan projection converts instead
+   of relabelling (it was adding shekels to dollars for thirty years).
+
+**There is no backward data migration** (design D19): a pre-conversion database is refused
+at boot with the remedy. "No migration" could not mean "no check" — the app would read
+₪12.34 as 12 agorot and report every figure ~100x wrong, which is worse than a failed
+migration because it does not announce itself. Backups written before this cannot be
+restored after it, and `preflightRestore` lists nothing as restorable into schema v7.
 
 ---
 
