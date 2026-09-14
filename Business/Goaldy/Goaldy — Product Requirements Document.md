@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-09-14 v2.13       |
-| **Version**      | 2.13                   |
+| **Last Updated** | 2026-09-14 v2.14       |
+| **Version**      | 2.14                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -29,6 +29,7 @@
 |**2.11**|**2026-09-14**|**F7.8 added: the Budgets page has a time axis.** A progress bar at 70% means opposite things on day 5 and on day 25, and the fill alone rendered them identically — the first thing F19's engine is spent on. A neutral marker now shows how far through the period the user is, with one line of plain language: on course for X, a run of overspends, or a budget that is routinely exceeded. The marker is deliberately not red — red means money went out (§1.4), and a projection is not yet a fact. **Income targets get the projection and no verdict**: the underlying metrics count occurrences ABOVE the figure, which reads as "you went over" on an expense budget and "you beat it" on an income target, and one arithmetic cannot serve both.|
 |**2.12**|**2026-09-14**|**F7.4 closes.** The trailing-average hint has had no UI home since the direct-edit rework — computed, sent to the client, and shown nowhere. It now opens the set-a-budget form as a typical figure, a range, a steadiness verdict and a one-click suggested amount. Records the three rules that make the suggestion trustworthy: the **median** rather than the mean (one December must not set a budget), **p75 instead** where spending is genuinely erratic (headroom sized by the category's own history, not an invented margin), and **rounding up** (down is the one direction that makes a suggestion wrong on arrival). The in-progress period is excluded, and below three completed periods there is no suggestion at all.|
 |**2.13**|**2026-09-14**|**The metrics surfaces land: tag detail, account detail, and the rules they all obey.** F19.6 records what the app shows and — more usefully — what it refuses to: a figure whose sample cannot support it appears as its own name, a dash and what would fix it, never hidden and never a number; a direction is only stated when the fit supports one; a normal month gets no comment at all; and an account figure the app would have to convert is simply not shown, because a wrong currency label on money is worse than an absent figure. The tag view also gains a small shape-over-time chart whose provisional final period is drawn dashed, so a month-to-date that is low by construction cannot read as a collapse.|
+|**2.14**|**2026-09-14**|**F10 is closed, and not as a Reports screen — F6.3's own position, finally executed.** The PRD has said since F6.3 that "the real reporting surface is the Dashboard, not a separate Reports screen", while `/reports` sat in the sidebar's **More flyout** — the least discoverable place in the app — rendering the words "Coming soon", which F10 itself named a launch blocker. Both are now gone: the placeholder page and every nav entry are deleted, `/reports` redirects, and the surface ships as **Trends**, a third `?dashboard=` view beside Cashflow and Net Worth (new **F6.5**). It absorbs what were three separately-specced surfaces — the Dashboard deltas (F6.1), the on-demand Review (design §9a C4) and Reports (F10) — into one page, which is less to build AND more likely to be read: a review behind a button nobody presses delivers nothing, and a nav-level tab has pull a button does not. Two product rules are recorded with it. **Opinion above the fold, completeness below**: the page opens with what changed, not with every tag, because a page that opens with seventy-two rows is the spreadsheet F10 was warned against becoming. And **delta and trend are separate columns, never one arrow** — a category can be up 40% against last period on a flat trend, or down 5% on a cleanly rising one, and collapsing them picks one story at random and hides the other. The engine gained `compare` to serve it (F19). **Known limit, stated in the UI rather than hidden**: the metrics engine has no account filter, so Trends covers all accounts and says so when the dashboard's account selector is set — a filter that appears to apply and does not is worse than one that is absent.|
 
 ---
 
@@ -194,11 +195,35 @@ The real reporting surface is the **Dashboard** (`/dashboard`), not a separate "
 
 A Sankey flow diagram plus two tag-breakdown cards (donut + table, folded to a chosen depth from one shared API response), and an in/out stacked bar chart (income up, expense down from the zero line, net line unstacked) with an optional "include transfers" toggle.
 
-The summary figures above these charts are **planned** to carry period-over-period deltas (this month vs. last, or vs. the same month last year) sourced from the Metrics engine (F19) — the backend comparison data `achievement-banner` was built against and has been waiting on. Not built.
+The summary figures above these charts do **not** carry period-over-period deltas; that comparison lives on the **Trends** view (F6.5), which is where a user goes to ask "compared to what?". The Cashflow tab stays a glance surface. `achievement-banner` remains built and wired to nothing — the data it needs now exists, but an achievement asserted from a number nobody asked for is still the worst version of it.
 
 ### F6.2 Net Worth Tab
 
 Net worth trend over time and a liquidity-class breakdown, reading from account balances and the same balance-history endpoint used per-account.
+
+### F6.5 Trends Tab
+
+**Built.** The third dashboard view, reached from the same `?dashboard=` selector as Cashflow and Net Worth, and the surface that replaced the `/reports` placeholder (F10).
+
+It answers one question — **compared to what?** — by measuring the horizon the user already selected against the window immediately before it, of the same length. Not against the same period last year: the horizon here is the user's own choice, and shifting it by a year would report on a window they did not pick. (The engine supports `previous-year`, and a seasonal comparison may yet earn its own control; the view does not ask the user to choose.)
+
+Three things stack, in this order:
+
+1. **Income, expense and savings, each with its change.** The insight is rarely in one figure — it is in the pair. Expense growing faster than income is arguably the most important fact about a household's year, and a strip of context-free totals is structurally incapable of expressing it.
+2. **What changed most** — a few findings, ranked by absolute money rather than by percentage. A ₪12 subscription doubling is +100% and belongs nowhere near the top of a list that also holds groceries rising ₪600; the household feels the shekels. The percentage is still shown, because it is how a reader judges whether a change is large *for that category* — it simply does not decide what they look at first. The section renders **nothing** when the largest movement is trivial, rather than padding itself to three: a "what changed" heading over ₪18 teaches the reader the section is noise, and once they skip it they skip the month that mattered too.
+3. **Every top-level category**, with **change and trend in separate columns**, under an **Expense / Income toggle**.
+
+**Why the toggle is not optional.** A tag carries no income/expense flag — classification comes from the transaction's own type (F6.3) — so the category list cannot be split on its own. Asking the engine for one direction and rendering every root tag reports a true zero for every tag of the other kind, which is how this first shipped: income categories appeared as "₪0, no change" rather than being absent, and a table of true zeros is indistinguishable from a broken one. The toggle makes the direction a stated choice, and a row with no activity in either window does not render at all.
+
+**Colour follows the money, not the sign.** Red and green mean the direction money moved (§1.4), never a good/bad verdict — so the same `+400` is red on an expense row and green on an income one, because it describes a different movement in each. A sign-only rule renders a pay rise in the same red as a grocery overspend.
+
+**Why two columns and not one arrow.** A delta compares two windows; a trend is a slope within one. They routinely disagree — one expensive month inside an unchanged habit is a large delta on a flat trend, and a single quiet month inside a rising year is a negative delta on a rising trend. Both are true. One arrow per row picks one of those stories at random and hides the other. The trend column obeys the app's standing rule: a direction is named only when the fit supports one, otherwise it reads "no clear direction".
+
+**Scope and limits, stated rather than discovered:**
+
+- **Top-level categories only.** A review is a question about categories: "Groceries" moving is the finding, "Groceries / Supermarket" moving is the same finding stated twice. Every row links into the tag view, which is where drilling down belongs.
+- **All accounts.** The metrics engine takes no account scope at any dimension, so the dashboard's account selector does not apply here. The view **says so** when a filter is set. A filter that appears to apply and silently does not is worse than one that is absent; scoping the engine by account is real follow-on work.
+- **Mounted only when its tab is selected.** This is the app's only whole-tree, two-window surface, and the rule that nothing whole-tree runs on a page load is what keeps the Dashboard's load cost where it is.
 
 ### F6.3 Correction from earlier drafts
 
@@ -323,9 +348,17 @@ An append-only event/condition log (not a pluggable multi-channel email/WhatsApp
 
 ## F10 — Reports
 
-**Stub, now a launch blocker for the planned public GTM push.** The Reports nav page currently renders "Coming soon." The Dashboard (F6) is the actual reporting surface today; a dedicated Reports section (tag comparison, exportable charts, custom date-range reports) remains a real gap, not a built feature. Closing this is prioritized ahead of any public launch — a visible "Coming soon" nav item on a self-hosted-software forum (Hacker News, r/selfhosted) reads as unfinished software to exactly the launch-day audience Goaldy is targeting.
+**Closed — as the Trends dashboard view (F6.5), not as a Reports screen.**
 
-**What was actually blocking it: there is no engine behind it.** "Tag comparison" means comparing tags on *something* — an average, a volatility, a trend — and no such figure existed in a comparable, general form; the two places the app computes one today (the tag view's average, a budget's trailing average) are narrow, ad-hoc, and disagree about what divisor an average uses. F19 (Metrics) is that engine. Reports is therefore a **consumer** of it — a members × metrics comparison table — and is scoped as its own follow-on once the engine ships, not as a parallel build that would mint a third definition of "average."
+The launch blocker was never the missing report; it was the visible "Coming soon" sitting in the nav where a launch-day audience would click it. That page and every nav entry pointing at it are deleted, and `/reports` redirects to Trends so a bookmark from last week still lands somewhere real.
+
+**Why it moved rather than being built where it stood.** F6.3 has said since the earliest drafts that the real reporting surface is the Dashboard. `/reports` meanwhile lived in the sidebar's **More flyout**, the least discoverable place in the product — so "build the Reports page" would have meant investing in a location nobody visits. A third tab beside Cashflow and Net Worth is the same content with real pull, and it is strictly less to build.
+
+**What it inherited.** The engine (F19) was always the prerequisite, and it now exists, so the three reports this section promised fall out of one page: tag comparison (every top-level category × this period, previous, change, trend), most-changed categories (the ranked findings at the top), and period-over-period comparison (`compare`, F19). Ranking by `cv` — "which categories are least predictable", a question nothing in the product could answer — remains available from the engine and is not yet surfaced here.
+
+**What the page deliberately is not.** A table of every tag. This section's own warning was that the temptation to treat the page as "just render the engine's output" is how it becomes a spreadsheet nobody reads; the answer is the ordering rule in F6.5 — opinion above the fold, completeness below it — and the name. "Reports" pulls toward the spreadsheet; "Trends" makes a seventy-two-row dump feel wrong to build, which is the point of naming it that.
+
+**Still open, and honestly so:** exportable charts and custom date-range reports, both named in the original scope. The horizon selector covers the common case of a custom range; export of a rendered chart does not exist.
 
 ---
 
@@ -687,7 +720,7 @@ Rather than a forward-looking phased SaaS rollout (the old §5), here is what's 
 
 **Shipped:** accounts (all liquidity classes, multi-currency), transactions (ingest, dedup, splits, labels, duplicate detection), tags (arbitrary tree), per-tag budgets with generations/rollover/trailing-average (F7), rules-based categorization, the Cashflow/Net-Worth dashboard, the Plan household simulator, notifications (event/condition log), bilingual i18n/RTL, self-host Docker deployment, versioned CI/CD releases, a public read-only demo, and a responsive mobile web shell (F17).
 
-**Modeled but not surfaced (data exists, UI doesn't):** Reports screen (F10), onboarding flow (F15.2) — both now flagged as launch blockers for the planned public GTM push, not just open gaps.
+**Modeled but not surfaced (data exists, UI doesn't):** onboarding flow (F15.2), still a launch blocker for the planned public GTM push. F10 (Reports) is closed — it shipped as the Trends dashboard view (F6.5) rather than as a separate screen.
 
 **Explicitly deferred, documented elsewhere:** a generic in-app data importer (`docs/features/2026-08-19-in-app-data-importer`), replacing the developer-only Buxfer CLI script.
 
