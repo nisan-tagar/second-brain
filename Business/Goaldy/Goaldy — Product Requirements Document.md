@@ -1,8 +1,8 @@
 | Field            | Value                  |
 | ---------------- | ---------------------- |
 | **Created**      | 2026-04-05             |
-| **Last Updated** | 2026-08-29 v2.6        |
-| **Version**      | 2.6                    |
+| **Last Updated** | 2026-09-13 v2.10       |
+| **Version**      | 2.10                   |
 | **Status**       | Draft                  |
 | **Author**       | Product design session |
 
@@ -24,6 +24,8 @@
 |2.4|2026-08-27|**F17 (Mobile Experience) added — corrected from no-mobile-support to Shipped.** A responsive mobile web shell below 768px: hamburger-drawer navigation with Settings in a top-bar overflow menu, a universal floating add-menu, every modal (and the drawer itself) rendering as a full-screen sheet, a mobile-specific compact time-horizon picker, and a new Accounts list screen grouped by liquidity class. Explicitly not covered yet: per-view mobile layouts beyond the shell, RTL support on mobile, and PWA installability (all named as deferred follow-on work in F17.5). §4 Current State Summary: "Budgets screen" removed from the modeled-but-not-surfaced list (stale since F7 shipped in v2.2 — corrected in passing) and the mobile shell added to Shipped.|
 |2.5|2026-08-29|**F18 (Goaldy.AI) added — the first documented monetization plan for the product.** Product/marketing strategy work concluded that Goaldy stays free and self-hosted forever, with a separate opt-in paid layer (Goaldy.AI) sold as a subscription: an in-app assistant scoped to one instance's own data (categorization assist, insight-to-action recommendations against the Plan simulator, range-based risk simulation, proactive goal-drift nudges) plus a higher, MCP-enabled tier that exposes an instance's harmonized accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, etc.) — positioned as a system-of-record layer for users who already run per-institution agents/MCPs but lack any cross-account, goal-aware memory between sessions. Tax optimization was evaluated and explicitly excluded as a separate, higher-liability product. §3 Non-Goals: the blanket "no Stripe, no paid tiers" line is corrected — monetization is now planned, gated through a small externally-run licensing service (Stripe-backed, signed offline-verifiable entitlement tokens) kept structurally separate from the single-tenant self-hosted app, never touching a user's financial data. §4 Current State Summary: "monetization" removed from the never-built/no-roadmap bucket.|
 |2.6|2026-08-29|**Free-tier roadmap items added across F2, F4, F6, F10, F13, F15, F17**, carrying the same product/marketing strategy session's conclusions for what ships ahead of (and independent of) Goaldy.AI: F2.1/F2.4 — OFX/QIF import, a SimpleFIN bridge, and automated transfer peer-matching all marked Planned (the ingestion items are also named prerequisites for F18.1's "harmonizes every account" MCP pitch to hold up). F4.4 — a localized starter tag tree and a config-only rule/tag-tree template exchange (cross-referenced to F18.6) planned against the empty-tag-tree problem. F6.4 (new) — a recurring/upcoming-transaction preview, planned as an extension of the existing rules engine. F10 and F15.2 — both stubs explicitly flagged as launch blockers to close before any public GTM push, not just open gaps. F13.2 — a planned feedback/issue-reporting channel, needed because the app is closed-source and therefore carries no GitHub Issues tab by default. F13.3 — a planned one-click encrypted scheduled backup, replacing the manual `docker compose cp` step. F17 — PWA installability reclassified from "not currently planned" to Planned.|
+|**2.9**|**2026-09-12**|**F19 (Metrics) added — design complete, not built.** A single engine computing descriptive statistics (mean, median, min/max with the bucket that produced them, sample standard deviation, coefficient of variation, IQR, OLS trend slope with r², CAGR, last-bucket z-score, concentration) over any transaction aggregate — tag, type, account, or the whole ledger — bucketed by day/week/month/quarter/year within the app's existing date horizon, with period-over-period and year-over-year comparison. Two decisions define it: metrics are computed over **time buckets, never over raw transactions** (so "min" is the lowest month, not the cheapest transaction), and every metric that cannot be honestly computed returns null with a machine-readable reason plus a sample-size sufficiency level, rather than a number — the guarantee that stops an AI surface narrating a trend off four noisy months. F7.4: the orphaned trailing-average hint gains a home (the set-a-budget flow) via this engine. F10: Reports is restated as a consumer of this engine rather than an independent build, which is what unblocks that launch blocker. F6.1: dashboard summary figures gain period-over-period deltas, the backend data `achievement-banner` has been waiting on. F18.2/F18.3: a single `get_metrics` tool is named as the analysis primitive for both AI tiers. §4: Metrics added to the planned-free-tier list. Design: `docs/superpowers/specs/2026-09-11-metrics-engine-design.md`. **Reversioned from v2.7 during review** — the unmerged market/GTM branch already holds v2.7 and v2.8, so this lands above them rather than colliding; the matching TDD section was renumbered §14 → §16 for the same reason (that branch's §14 is cited by BUG-002). **F19 is now explicitly blocked on the monetary-representation fix** (TDD §15, BUG-002): metrics sum thousands of weighted rows and compute a variance over them, which is the worst-behaved computation available on the `REAL`/float64 columns the ledger uses today. That fix is scheduled first.|
+|**2.10**|**2026-09-13**|**F19 is no longer blocked and no longer unbuilt.** The monetary-representation fix (TDD §15) shipped, and the engine is live through its consolidation phase: `GET /api/metrics` serves the full pack, and the tag detail view's per-month average now comes from it — the second implementation is deleted, which was F19's stated justification. F19.6 records the one user-visible number change that came with it: a per-month average now divides by the **complete calendar months** in the horizon, and a month the horizon cuts in half is excluded from the average while staying in the total. Month-aligned horizons (LAST_MONTH, LAST_YEAR, a whole-year range) are unaffected; horizons ending mid-month — YTD, THIS_MONTH, any rolling window — read slightly lower and more honestly, because the old rule counted a part-month's spending against a whole-month divisor.|
 
 ---
 
@@ -189,6 +191,8 @@ The real reporting surface is the **Dashboard** (`/dashboard`), not a separate "
 
 A Sankey flow diagram plus two tag-breakdown cards (donut + table, folded to a chosen depth from one shared API response), and an in/out stacked bar chart (income up, expense down from the zero line, net line unstacked) with an optional "include transfers" toggle.
 
+The summary figures above these charts are **planned** to carry period-over-period deltas (this month vs. last, or vs. the same month last year) sourced from the Metrics engine (F19) — the backend comparison data `achievement-banner` was built against and has been waiting on. Not built.
+
 ### F6.2 Net Worth Tab
 
 Net worth trend over time and a liquidity-class breakdown, reading from account balances and the same balance-history endpoint used per-account.
@@ -226,7 +230,9 @@ If the destination tag already has its own budget, or has children of its own, t
 
 ### F7.4 Trailing Average
 
-The backend computes an average and a trend over the budget's own trailing occurrences (e.g. 12 trailing months for a monthly budget, 3 trailing years for an annual one) — not a fixed calendar window, since a fixed window means something different for every period length. The data exists at the API level; as of the direct-edit rework (F7.7) it no longer has a dedicated slot in the UI, since it was tied to editing the open generation specifically and doesn't have a clean per-row home now that every generation is independently editable — a future revisit can decide where it resurfaces.
+The backend computes an average and a trend over the budget's own trailing occurrences (e.g. 12 trailing months for a monthly budget, 3 trailing years for an annual one) — not a fixed calendar window, since a fixed window means something different for every period length. The data exists at the API level; as of the direct-edit rework (F7.7) it no longer has a dedicated slot in the UI, since it was tied to editing the open generation specifically and doesn't have a clean per-row home now that every generation is independently editable.
+
+**That revisit is now answered (F19, planned).** The hint's home is the moment the amount is being chosen — the set-a-budget flow — where the tag's trailing mean, median, highest occurrence and coefficient of variation all belong on screen at once, not a single average bolted to a history row. The computation itself is re-expressed as a budget-period bucketing of the Metrics engine rather than kept as its own parallel implementation, so a budget's trailing figures and the rest of the app's averages can no longer disagree about what an average means.
 
 ### F7.5 The `/budgets` Page
 
@@ -298,6 +304,8 @@ An append-only event/condition log (not a pluggable multi-channel email/WhatsApp
 ## F10 — Reports
 
 **Stub, now a launch blocker for the planned public GTM push.** The Reports nav page currently renders "Coming soon." The Dashboard (F6) is the actual reporting surface today; a dedicated Reports section (tag comparison, exportable charts, custom date-range reports) remains a real gap, not a built feature. Closing this is prioritized ahead of any public launch — a visible "Coming soon" nav item on a self-hosted-software forum (Hacker News, r/selfhosted) reads as unfinished software to exactly the launch-day audience Goaldy is targeting.
+
+**What was actually blocking it: there is no engine behind it.** "Tag comparison" means comparing tags on *something* — an average, a volatility, a trend — and no such figure existed in a comparable, general form; the two places the app computes one today (the tag view's average, a budget's trailing average) are narrow, ad-hoc, and disagree about what divisor an average uses. F19 (Metrics) is that engine. Reports is therefore a **consumer** of it — a members × metrics comparison table — and is scoped as its own follow-on once the engine ships, not as a parallel build that would mint a third definition of "average."
 
 ---
 
@@ -515,6 +523,13 @@ An in-app assistant scoped strictly to one instance's own data. Planned capabili
   is currently pull-only (read on demand); push a notification the moment a goal or
   budget visibly drifts, rather than waiting for the dashboard to be opened.
 - AI-narrated Plan scenarios ("what if I front-load university savings by 2 years?").
+- **Trend analysis and recommendation refinement** through the Metrics engine's single
+  `get_metrics` tool (F19.6) — the assistant's analysis primitive. Every claim it makes
+  about a trend is bounded by what that tool returns: a metric with too small a sample
+  comes back as nothing-with-a-reason rather than a number, and a trend with a poor fit
+  is flagged as one, so "your dining spend is climbing" cannot be generated off four
+  noisy months. This is the mechanism that makes the assistant's numbers trustworthy —
+  not prompt instructions, which a model can talk itself out of.
 
 **Explicitly excluded from scope:** tax optimization (loss-harvesting, contribution-limit
 tracking, RSU-vesting timing). A real request from this audience, but judged a distinct,
@@ -523,8 +538,11 @@ higher-liability product — not on this roadmap.
 ### F18.3 Chat + MCP Tier
 
 Everything in F18.2, plus an MCP server exposing that instance's harmonized
-accounts/tags/budgets/Plan to external agents (Claude Desktop, Claude Code, and
-similar). Reuses the existing OpenAPI 3.1 surface (`lib/server/openapi.ts`) as the
+accounts/tags/budgets/Plan — and its metrics (F19) — to external agents (Claude
+Desktop, Claude Code, and similar). Metrics matter disproportionately here: an
+external agent arrives with no memory of the household and no way to judge whether a
+figure it just read is typical, so a self-describing metric pack (sample size, spread,
+how unusual the latest period is) is worth more to it than raw transaction access. Reuses the existing OpenAPI 3.1 surface (`lib/server/openapi.ts`) as the
 source the MCP tool/resource definitions are generated from, rather than a new
 hand-built API. Write-capable MCP scopes (tag, categorize, move a budget) are opt-in
 and separate from a default read-only scope — an external agent should never get
@@ -560,6 +578,69 @@ surface without ever centralizing a user's ledger.
 
 ---
 
+## F19 — Metrics
+
+**Partly shipped.** One engine that computes descriptive statistics over any transaction aggregate — a tag, a direction (income/expense/net/savings rate), an account, or the whole ledger — within the date horizon the user has already selected, and serves the same numbers to the UI, to Reports (F10), and to the AI surfaces (F18).
+
+Design: `docs/superpowers/specs/2026-09-11-metrics-engine-design.md`. Architecture: TDD §16.
+
+> **Was blocked on the monetary-representation fix (TDD §15, BUG-002); that shipped, and so has the engine's first half.** Every monetary column in the ledger was a binary float, and this feature does precisely the arithmetic that exposes that: summing thousands of rows, multiplying each by a split weight, then measuring how much they vary. Building a statistics engine on a representation already known to be wrong means building it twice, so the representation was fixed first.
+>
+> **Built today:** the metric catalog, the bucketing (including a budget's own occurrence windows), period inference, the two-scope window resolution, and `GET /api/metrics`. The **consolidation** F19.1 calls the feature's actual justification is done for the tag view — its per-month average now comes from the engine and the duplicate implementation is deleted. **Not yet built:** the `get_metrics` AI tool, the UI surfaces beyond the tag view's existing KPI cards, and the budget trailing-average consolidation.
+
+### F19.1 Why It Exists
+
+The app already computes "money over a window" in six places, two of which are already metrics built ad hoc — the tag view's average per month and a budget's trailing average — using **different divisor rules**. A third (the bar chart's bucketed series) omits empty months entirely, so averaging it silently reports what a category costs *when it fires* while appearing to report what it costs per month. There is no shared definition of "average," and nothing in the product says so.
+
+Metrics is therefore a **consolidation first and a feature second**. It replaces those ad-hoc computations rather than joining them. If it ships and they survive alongside it, it has made the product worse.
+
+### F19.2 What A Metric Is
+
+A metric is computed over a **time series of buckets, never over raw transactions.**
+
+This resolves the ambiguity that makes the naive version of this feature unusable: "the minimum for Groceries" can mean the cheapest grocery transaction (₪12) or the lowest grocery month (₪1,400). They are different questions serving different purposes. Metrics answers the second; the first is already what the transaction list with a sort is for. Consequently the bucket size (day/week/month/quarter/year) is always an explicit part of the question — there is no default, because a default bucket size is a default answer to "minimum of what."
+
+Two rules follow, and both are user-visible:
+
+- **A month with no activity counts as zero, not as missing.** A category used twice in a year averages at a twelfth of its total, not at its transaction size. The opposite reading — "what does a car repair cost *when* I have one" — is available, but it is never the unthought-about default.
+- **A partial period is excluded from averages, spreads and trends, but still counted in totals.** Almost every horizon ends mid-month, and eleven days into September will always be the lowest month, always drag the average down, and always make the trend look like a collapse. The total still includes it, so the figure reconciles with every other screen; the response always names which partial period was dropped.
+
+### F19.3 What Is Measured
+
+- **Level** — total, transaction count, mean, median, minimum and maximum (each naming *the period that produced it* — "your worst month was ₪4,200" is not an answer if it can't say which month), first, last, and how many periods had any activity at all (a category active in 3 of 12 months is a different animal from one active in 12, and the product should not blur them).
+- **Spread** — sample standard deviation, and the **coefficient of variation** (spread relative to size), which is the figure the UI leads with. A standard deviation of ₪400 means nothing until you know whether the average is ₪500 or ₪50,000. Also the interquartile range, which survives the one December that destroys a mean.
+- **Trend** — absolute and percentage change, a least-squares slope **with its goodness of fit**, and compound annual growth rate.
+- **Anomaly** — how unusual the most recent complete period is against the ones before it (the single most actionable number here: "is this month weird?"), and concentration (what share of the year one period accounts for).
+- **Comparison** — the same pack over the immediately preceding horizon, or the same horizon one year earlier, with per-metric deltas. Year-over-year, not just period-over-period, because a seasonal category compared against last month is noise.
+
+### F19.4 The Honesty Guarantee
+
+**Any metric that cannot be computed honestly returns nothing, with a reason — never a number.**
+
+This is a product requirement, not an implementation detail, and it is the part that makes the feature safe to hand to an AI surface. A standard deviation over three months is noise. A growth rate against a first month of zero is infinite. A compound growth rate across a sign change is meaningless. A trend line through four scattered points explains nothing. Each of those, rendered as a confident figure, produces a plausible and wrong sentence — from the UI, and far more readily from a model.
+
+So every response carries the sample size, whether the latest period was partial, and a sufficiency level of **none / weak / adequate**. At *none*, the UI renders the metric's label with a dash and what would fix it ("needs 3+ months") — it does **not** hide the metric, because a hidden metric tells the user nothing about why it's absent. At *weak*, the figure renders with its sample size stated. And a trend whose fit is poor is rendered as flat regardless of its slope's sign.
+
+**Compound growth rate is explicitly demoted.** It is a two-point estimator that ignores every observation between the endpoints, so on groceries or dining it reports whichever noise landed on the first and last month; it is also undefined far more often than expected, since any category that starts mid-horizon has a first period of zero. It ships, because it is genuinely the right metric for a compounding quantity (net worth, an investment balance, a savings rate), but it is opt-in and is never shown without its fit alongside it. The default trend figure is the least-squares slope, which uses every period and degrades gracefully.
+
+### F19.5 Scope
+
+Four aggregates in the first version: **tag** (with descendants rolled in and splits weighted, exactly as every other tag figure in the app), **type** (income / expense / net / savings rate), **account**, and **the whole ledger**. Merchant, label, rule and plan-item aggregates are deliberately out — each is a real design decision about what a "member" is, not a free addition, and an unbounded aggregation surface is a generic analytics engine rather than a household finance product.
+
+Account metrics are reported in each account's **own currency** and are not converted, matching how the account view already reports every other figure — so two account series in one response may be in different currencies and must never be summed. Everything else converts to base currency at **today's** exchange rates, as the rest of the app does, which means a foreign-currency category's trend describes behaviour change rather than currency movement.
+
+### F19.6 Where It Surfaces
+
+In order: the tag detail view (**done** — and this is where the duplicated average got deleted), the account detail view, the set-a-budget flow (F7.4), the dashboard's period-over-period deltas (F6.1), and finally Reports (F10) as a comparison table. Plus one AI tool, `get_metrics`, shared by both F18 tiers — carrying the same prohibitions in its description that the UI enforces in pixels, since a tool description is the only instruction an external agent ever receives.
+
+**The tag view's number changed, deliberately.** The per-month average now divides by the **complete calendar months** in the horizon, and a month the horizon cuts in half is excluded from the average while remaining in the total (F19.2's partial-period rule, applied to a figure that previously ignored it). The old rule divided the horizon's total by its span in mean-length months, which counted a part-month's spending against a whole-month divisor: on YTD in mid-September, eight and a half months of spending was reported as a per-month figure over eight. Month-aligned horizons — LAST_MONTH, LAST_YEAR, a whole-year custom range — are unaffected. The figure is also withheld entirely until the horizon contains one complete month, which replaces a 28-day threshold that let a 29-day range through and divided by a month it did not have.
+
+### F19.7 Non-Goals
+
+No forecasting — a trend describes the past; projection is the Plan simulator's job and stays there. No alerting on anomalies (a separate feature with its own noise budget). No user-defined metric formulas. No historical exchange rates. No stored or precomputed metric tables — every figure is computed live from the ledger, because a stale number in a financial app is worse than a slow one.
+
+---
+
 ## 3. Non-Goals (Explicit Exclusions)
 
 Confirmed current, replacing the old table:
@@ -590,10 +671,12 @@ Rather than a forward-looking phased SaaS rollout (the old §5), here is what's 
 
 **Never built, and not on any current roadmap:** Israeli-specific financial-instrument cards, OAuth/multi-tenancy.
 
-**Planned, not yet built (free tier):** OFX/QIF import and a SimpleFIN bridge (F2.1), automated transfer detection (F2.4), a localized starter tag tree and config-only template exchange (F4.4), a recurring/upcoming-transaction preview (F6.4), a public feedback/issue-reporting channel (F13.2), a one-click encrypted scheduled backup (F13.3), and PWA installability (F17.5).
+**Planned, not yet built (free tier):** OFX/QIF import and a SimpleFIN bridge (F2.1), automated transfer detection (F2.4), a localized starter tag tree and config-only template exchange (F4.4), a recurring/upcoming-transaction preview (F6.4), a public feedback/issue-reporting channel (F13.2), a one-click encrypted scheduled backup (F13.3), PWA installability (F17.5), and the Metrics engine (F19) — designed in full, the prerequisite for closing the Reports launch blocker, and itself sequenced behind the monetary-representation fix (TDD §15).
+
+**Known defects, registered not yet scheduled:** the app repo now carries a bug register (`docs/bugs/`). Two entries: reported-value accounts keep no valuation history and an edit destroys the prior value (BUG-001, High — it blocks net-worth history under F6.2 from being built correctly), and every monetary column is stored as a binary float (BUG-002, Medium and rising — harmless at today's data volume, and progressively more expensive to fix as real ledgers accumulate).
 
 **Planned, not yet built (paid):** Goaldy.AI (F18) — an opt-in paid layer (in-app AI assistant, an MCP server for external agents, an optional hosted instance) gated by a separately-run licensing service. AI categorization (F5.2) is part of this plan rather than a dead schema seam.
 
 ---
 
-_Document created: 2026-04-05. Rewritten in full 2026-08-21 (v2.0) to match the shipped self-hosted architecture. Status: Living document — update in the same change as any feature that ships or changes shape._
+_Document created: 2026-04-05. Rewritten in full 2026-08-21 (v2.0) to match the shipped self-hosted architecture. Last updated 2026-09-12 (v2.9). Status: Living document — update in the same change as any feature that ships or changes shape._
