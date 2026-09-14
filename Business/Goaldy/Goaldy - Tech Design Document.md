@@ -1,8 +1,8 @@
 | Field            | Value            |
 | ---------------- | ---------------- |
 | **Created**      | 2026-04-03       |
-| **Last Updated** | 2026-09-14 v2.13 |
-| **Version**      | 2.13             |
+| **Last Updated** | 2026-09-14 v2.14 |
+| **Version**      | 2.14             |
 | **Status**       | Draft            |
 
 ### Change Log
@@ -31,6 +31,7 @@
 |2.11|2026-09-13|**Three things §16 said were built and were not**, found on the way into the UI phase and now shipped. (1) **Group F had tests and no caller** — the seven budget metrics were computable in the domain layer and unreachable through the API. Wired, over the **budget's own occurrence windows** rather than the series' grain, because a budget's contract is its occurrence window: a 17th-to-17th budget cannot be checked against calendar September. The response carries a `budget` object stating the allowance, converted to the series' currency. Rollover budgets withhold all of Group F with reason `budget-rollover`. (2) **Period inference no longer skips when a budget resolves the period.** That saving cost the one genuinely new capability in §9a C1: a monthly budget on annual spending is a misconfigured budget, and only a running inference can say so. (3) **`members` (csv, ≤50) and `orderBy`/`limit`** — design §5.2 and Q6 make both Phase 2 requirements and the plan omitted them. The response now matches design §5.3: `{ query, baseCurrency, fxBasis, series: [] }`, always an array. The batch is a LOOP, bounded by the 50-series cap — §7a measured one tag at 0.26 ms, and a single `GROUP BY member, bucket` pass needs a descendant-to-member CTE that no measurement has yet demanded. Ranking is in TypeScript because the ranked metrics are derived: there is no `ORDER BY cv` to write, and what "server-side" buys is a review screen fetching K series instead of fifty.|
 |2.12|2026-09-14|**D33 held on contact, and is now the shipped shape.** `GET /api/tags/:id/budget` computes its metric pack IN PLACE from the `trailingAverage.occurrences[]` it already had — a bucketed, sign-normalised, budget-period series that was typed in OpenAPI, delivered to the client wrapper, and consumed by nothing. Zero extra queries, and the set-a-budget modal calls no metrics endpoint. This is the payoff of §16.2's layering being pure and database-free: any handler already holding a series can reach the engine. **The general rule stands as written** — a handler with a series computes the pack itself; only a consumer needing a series it does not have calls `/api/metrics` (the Budgets list does, and fetches all its rows in one `members` request). Two calls the design did not specify: `txCount` is omitted on this path rather than reported as a zero, because `computeTrailingAverage` sums amounts without counting rows and a measurement that never happened must not be serialised as one; and the in-progress occurrence is flagged partial so the existing `partialPolicy` keeps a half-elapsed period out of the distribution.|
 |2.13|2026-09-14|**§9b's threshold table shipped, late enough to prove its own point.** The design warned that an undecided threshold gets invented by whoever writes the first consumer; by the time `packages/schema/metric-copy.ts` was written, **two had been** — in two separate files, one a bare `paceRatio > 1` inside a view. Every band and message key now lives in that one module, and `lib/dev/metric-band-guard.test.ts` fails the build on a banded metric compared against a bare number anywhere else. **It scans `.tsx` as well as `.ts`**, unlike the money guards: a presentation threshold is invented in a view far more often than in a query, and a server-only scan would have missed the one real violation. Both prior inventions are retired into the table; one shifted behaviour by a hair, since band edges are inclusive-below (`>= 1.30`, not `> 1.3`). The `get_metrics` tool description carries the same bands as the table's third consumer, so a model has words to use rather than inventing its own.|
+|2.14|2026-09-14|**§16.7's consolidation is complete: no second implementation of an average survives.** `computeTrailingAverage` is consolidated rather than deleted — a budget's status is a different question from a metric series, and collapsing them would have been the worse answer — but its windows and its mean now come from the engine, so the two cannot drift. The work also surfaced an **N+1 nobody had noticed**: one query per occurrence, twelve for a monthly budget, each able to fetch its own exchange rates, over rows sitting in one contiguous range. One query now, pinned by a statement count rather than by timing. Also records the general rule that came out of D33 and now has two instances: a handler ALREADY HOLDING a bucketed series computes its pack in place; only a consumer needing a series it does not have calls `/api/metrics`.|
 
 ---
 
@@ -837,12 +838,17 @@ at `level === 'none'`, and a slope with `r² < 0.3` is not a trend regardless of
   the month holding it is complete, and without this distinction a three-month-old tag
   lost its first month and fell below the render floor. And **the 28-day threshold was a
   proxy** for "we have no whole month"; its exact form is `mean === null`.
-- **`computeTrailingAverage` is re-expressed later**, as `grain='budget-period'` over
-  `lib/domain/budget-period.ts`'s existing `windowForOccurrence` — budget occurrences are
-  a non-calendar grain (a monthly budget starting on the 17th trails 17th-to-17th
-  windows, which `strftime('%Y-%m')` cannot express). Sequenced last on purpose: it is a
-  behaviour-sensitive shipped surface and moves only once the engine is proven by two
-  other consumers.
+- **`computeTrailingAverage` is consolidated — ✅ shipped 2026-09-14, and it was not a
+  deletion.** The function keeps its contract, because a budget's STATUS is genuinely a
+  different question from a metric series and collapsing the two would have been a worse
+  answer than two functions. What changed is that it can no longer drift: its windows come
+  from the same `windowForOccurrence` the `budget-period` grain walks, and its average IS
+  the engine's `mean`. **The consolidation also found an N+1**: it issued one query per
+  occurrence — twelve for a monthly budget, each able to fetch exchange rates of its own —
+  to summarise rows sitting in one contiguous date range. Now one query, bucketed in
+  memory, pinned by a statement-count test rather than by timing. Sequenced last on
+  purpose, as a behaviour-sensitive shipped surface; the existing budget tests passed
+  unchanged, which was the acceptance criterion.
 - **`getBarChart` is not replaced — ✅ header comment shipped 2026-09-13.** Its output is
   sparse and must never be averaged, and its bucket labels are display strings, not dates.
   Convergence is optional future work.
