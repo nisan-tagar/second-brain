@@ -451,6 +451,23 @@ export const queries = {
 
 **Use `better-sqlite3` (synchronous):** Simpler than sqlite3 (callback-based), single-threaded is fine for one user, better performance.
 
+### 4.2a Boot sequence, migrations, and the incompatible-ledger gate
+
+`getDb()` opens the one file, enables WAL + foreign keys, and runs `runMigrations()`: goaldy.sql (every statement `IF NOT EXISTS`, so it is the schema and the migration in one), then the ordered in-code backfills, then the `schema_version` stamp read out of goaldy.sql itself.
+
+**Money is stored as INTEGER minor units** (`toMinor`/`toDecimal` in `packages/schema/money.ts`, `readMoney`/`writeMoney` as the one decimal↔integer boundary), and every money column carries `CHECK (typeof(col) = 'integer')` because SQLite types are affinities — an `INTEGER` column accepts `12.34` without complaint. **There is no backward migration** from the earlier REAL storage: existing data is re-imported. But "no migration" cannot mean "no check" — an unconverted ledger read as minor units reports every figure ~100× wrong, silently.
+
+**The check is a value, not an exception.** `detectLedgerIncompatibility(db)` (`lib/server/ledger-incompatibility.ts`) scans `MONEY_COLUMNS` with `typeof()` — what is actually stored, since the declared type cannot be trusted — and returns a `LedgerIncompatibility { code, title, detail, offenders[] }` or `null`. `runMigrations()` runs it first and, if it fires, **returns it before running anything**: a ledger this build cannot read is one it must not write, so the previous build can still open the file to export. It used to throw inside `getDb()` before the handle was stored, which meant nothing at all could run — not even the sign-in that would let the user act. Now the handle opens and `db.ts` keeps the report (`ledgerIncompatibility()`); a test derives `MONEY_COLUMNS` from goaldy.sql's `typeof` CHECKs so a new money column cannot slip past the scan.
+
+**Two gates keep every reader away from the numbers while the report is non-null:**
+
+- `withAuth` (`lib/server/http.ts`) — after auth, every route except `/api/recovery/*` answers **503** with the report as `details`. Login/logout (`/api/session`) never go through `withAuth`. The OpenAPI document stamps that 503 onto every non-exempt operation in one place.
+- `(app)/layout.tsx` — a signed-in user is redirected to `/recovery`. The login page shows a banner first, so the redirect is not a surprise.
+
+**`/recovery`** (auth-family shape, session required) lists the offenders and offers `POST /api/recovery/wipe` (`{ confirm: 'DELETE' }`, re-validated server-side; 409 on a healthy ledger so it is never a second door to the ordinary wipe). `recoverIncompatibleLedger()` (`queries/recovery.ts`) **DROPs** `RECOVERY_TABLES` = `FINANCIAL_TABLES + plan_settings` in one deferred-FK transaction, then `recheckLedger()` re-runs `runMigrations()` so goaldy.sql recreates them with the current declarations. Drop rather than delete because the real 2026-09 ledger declared money `REAL` (an emptied REAL column coerces the first new integer to a float and re-trips the check on the next boot) and predated `asset_valuations` (a `DELETE FROM` a missing table rolled the whole wipe back). `plan_settings` is in scope because `monthly_savings` is a checked column and the ordinary wipe keeps that table. `users`, `sessions`, `mfa_recovery_codes` and `settings` survive — the same cannot-lock-you-out rule as the other two danger-zone actions. An exhaustiveness test asserts `RECOVERY_TABLES ∪ RECOVERY_PRESERVED_TABLES` names every table in goaldy.sql.
+
+A future major change that cannot be migrated in place adds a detector to the same function and inherits the whole flow.
+
 ### 4.3 API Routes (REST)
 
 ```typescript

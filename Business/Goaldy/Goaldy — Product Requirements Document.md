@@ -476,15 +476,16 @@ say.
   destructive *action* with its own confirmation is not the same thing as a destructive
   *setting*. Its row states "Replaces the ledger" inline.
 
-*Danger zone* — two actions with fixed, named scopes rather than one action whose blast
+*Danger zone* — actions with fixed, named scopes rather than one action whose blast
 radius depends on a checkbox, so a destructive operation is identifiable by its name alone.
 
 | Action | Erases | Keeps |
 |---|---|---|
 | **Delete financial data** | the 12 financial tables — accounts, transactions, tags, budgets, rules, plan items, notifications and their join tables | settings, sign-in, plan settings |
 | **Reset app data** | the above, **plus** preferences: duplicate criteria, transfer mode, locale, saved mappings | sign-in, household members, and the API token |
+| **Delete financial data and continue** (offered only on `/recovery`, see below) | the financial tables **plus** plan settings | settings, preferences, sign-in, household members, and the API token |
 
-**Neither can lock the user out, by construction.** Sign-in survives both, so there is
+**None of these can lock the user out, by construction.** Sign-in survives both, so there is
 never a return to first-boot setup — where the new token would be printed only to the
 server console, permanently locking out anyone who administers the instance through a
 browser. The deployment's API token survives both too, so connected integrations keep
@@ -496,6 +497,32 @@ on*; an info button opens the specifics for the settings whose real behaviour ca
 honestly compress to a line. **Nothing that changes what the user would decide lives only
 behind that button.** The danger zone has no help modal on purpose — its specifics belong
 in the confirmation the user is already reading.
+
+**Recovery from a database this build cannot read (`/recovery`).** A major upgrade can
+leave the existing `goaldy.db` in a shape the new build must not read — the first case
+was the monetary migration, after which every money figure would be reported ~100×
+wrong. The app never shows a stack trace for this and never silently reads the wrong
+numbers. Instead:
+
+- The login page still works and carries a banner: *"This database needs attention
+  before you can continue — sign in to review your options."* Sign-in, MFA and sessions
+  are unchanged.
+- Once signed in, every app page redirects to `/recovery`, and every API call answers
+  `503` with the same report, so an integration polling with a token gets a reason rather
+  than a wrong figure.
+- `/recovery` is a single card that names the problem, lists the affected columns with
+  row counts, and offers two paths. **"I have a copy of my data"** (a portable export from
+  the previous build, or the original bank files) → *Delete financial data and continue*,
+  behind a typed `DELETE` confirmation that states its scope, landing on Settings → Data
+  → Import. **"I don't have a copy"** → stop, start the previous build and export first,
+  or copy `goaldy.db` off the volume — nothing to click.
+- A **backup** file from the previous build cannot be restored into the new one (restore
+  is byte-exact and refuses the schema mismatch); the way back in is **Import**, which
+  converts. The recovery copy says so.
+
+There is deliberately no in-place upgrade for this class of change (TDD §4.2a, "no backward
+migration"): a half-converted ledger is a silent money bug, and a refused boot with a
+clear way out is not.
 
 
 ### F9 — Export, Backup and Restore
